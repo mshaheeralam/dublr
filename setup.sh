@@ -62,3 +62,9 @@ cd ..
 
 pip install pymongo
 pip install boto3
+
+pip uninstall torchaudio
+pip install --pre torchaudio --index-url https://download.pytorch.org/whl/nightly/cu118
+git clone https://github.com/isi-nlp/uroman.git
+pip install sox 
+pip install dataclasses 

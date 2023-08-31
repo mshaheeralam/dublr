@@ -1,4 +1,4 @@
-from dublr import *
+from old_pipeline import *
 import time
 from moviepy.video.io.ffmpeg_tools import ffmpeg_extract_audio
 from moviepy.video.io.VideoFileClip import VideoFileClip
@@ -40,38 +40,61 @@ def run(video_path, lip_sync, audio_syn, subtitiles, preset, gan, video, SOURCE_
             raise FileNotFoundError("Could not Denoise")
 
         start = time.time()
-        chunks, segments, sentences = create_segments('Data/vocals.wav')
-        end = time.time()
-        if chunks and segments and sentences:
-            print("Chunks :", (end-start) / 60, "min")
-        else:
-            raise ValueError("Could Not Create Segments")
-
-        start = time.time()
-        chunks, text, sentences = transcript(chunks, segments, SOURCE_LANG, sentences)
+        text, segments = transcript('Data/vocals.wav', SOURCE_LANG)
         end = time.time()
         if text:
             print("Transcription :", (end-start) / 60, "min")
         else:
             raise ValueError("Could Not Transcribe")
 
+        iso_codes = {"Arabic": "ara", "Urdu": "urd-script_arabic", 
+                     "English": "eng", "French": "fra", "Spanish": "spa", 
+                     "Hindi": "hin", "German": "deu",
+                     "Russian": "rus", "Bengali": "ben"}
+        if SOURCE_LANG in iso_codes:
+            start = time.time()
+            chunks = create_segments('Data/vocals.wav', "Data/sentence.txt", iso_codes[SOURCE_LANG])
+            end = time.time()
+            print("Chunks :", (end-start) / 60, "min")           
+        else:
+            raise ValueError("Could Not Create Segments")
+
         start = time.time()
-        chunks = translation(text, chunks, segments, SOURCE_LANG, sentences)
+        chunks = translation(text, chunks, segments, SOURCE_LANG)
         end = time.time()
         print("Translation :", (end-start) / 60, "min")
         
         if subtitiles:
             start = time.time()
             chunks_to_srt(chunks, segments, 'Data/sub.srt')
+            if os.path.exists('Data/sub.srt'):
+                print("SRT Generated")
+            else:
+                raise FileNotFoundError("Could not Generate SRT")
             if audio_syn:
+                if os.path.exists(video_path):
+                    print("Video File Exists")
+                else:
+                    raise FileNotFoundError("No Video File Found")
                 merge_srt_with_video(video_path, 'Data/sub.srt', 'Data/subtitle.mp4')
                 video_path = 'Data/subtitle.mp4'
+                if os.path.exists('Data/subtitle.mp4'):
+                    print("Subtitled Video Generated")
+                else:
+                    raise FileNotFoundError("No Video File Found")
             else:
+                if os.path.exists(video_path):
+                    print("Video File Exists")
+                else:
+                    raise FileNotFoundError("No Video File Found")
                 merge_srt_with_video(video_path, 'Data/sub.srt', 'output.mp4')
                 video_path = 'output.mp4'
+                if os.path.exists(video_path):
+                    print("Subtitled Video Generated")
+                else:
+                    raise FileNotFoundError("No Video File Found")
             end = time.time()
             print("Subtitles :", (end-start) / 60, "min")
-
 
         if audio_syn:
             start = time.time()
@@ -99,9 +122,10 @@ def run(video_path, lip_sync, audio_syn, subtitiles, preset, gan, video, SOURCE_
 
         remove_data()
         return None
+    
     except Exception as e:
         print(str(e))
-        #remove_data()
+        remove_data()
         return e
 
 if __name__ == '__main__':
