@@ -59,6 +59,12 @@ pip install librosa==0.9.1
 pip install opencv-python
 apt-get update && apt-get install libgl1 -y
 cd ..
+conda uninstall ffmpeg
+wget https://johnvansickle.com/ffmpeg/builds/ffmpeg-git-amd64-static.tar.xz
+tar xvf ffmpeg-git-amd64-static.tar.xz
+cd ffmpeg-git-20230830-amd64-static
+mv ffmpeg 
 
 pip install pymongo
 pip install boto3
+pip install python-dotenv

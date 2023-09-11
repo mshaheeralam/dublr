@@ -8,15 +8,15 @@ import json
 import asyncio
 from pymongo import MongoClient
 import time
+from botocore.exceptions import ClientError
+from sendgrid import SendGridAPIClient
+from sendgrid.helpers.mail import Mail
+from dotenv import load_dotenv
 
-
-os.environ["AWS_DEFAULT_REGION"]='ap-northeast-1'
-os.environ["AWS_ACCESS_KEY_ID"]='AKIAWEPYHILPXHGDOTJ5'
-os.environ["AWS_SECRET_ACCESS_KEY"]="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"
-
-
+load_dotenv()
 sqs = boto3.client('sqs')
-queue_url = 'https://sqs.ap-northeast-1.amazonaws.com/421964235487/Dublr-Video-Process_Queue'
+queue_url = os.getenv("QUEUE_URL")
+
 
 def list_files_in_bucket(bucket_name):
     try:
@@ -30,12 +30,13 @@ def list_files_in_bucket(bucket_name):
     except Exception as e:
         print("An error occurred:", e)
 
-async def process_video(vid_key,source_lang,start_time, end_time):
+
+async def process_video(vid_key,lip_flag,sub_flag,source_lang,start_time, end_time):
     try:
         with tempfile.TemporaryDirectory() as temp_dir:
             file_location = os.path.join(temp_dir,vid_key)
             s3 = boto3.client('s3')
-            bucket_name = 'dublr-bucker'
+            bucket_name = 'dublr-bucket'
             print('Trying to get object from S3...')
             response = s3.download_file(bucket_name, vid_key, file_location)
             print('Object fetched successfully.')
@@ -43,36 +44,59 @@ async def process_video(vid_key,source_lang,start_time, end_time):
                 print("Video File Downloaded and Exists")
             else:
                 raise FileNotFoundError("Problem in Uploading Video File")
-            exc=run(video_path=file_location, SOURCE_LANG=source_lang, gan=True, lip_sync=True, preset='ultra_fast', start=start_time, end=end_time)
+            print(source_lang)
+            if source_lang=="auto":
+                exc=run(file_location,lip_flag,True,sub_flag,'fast',True,True,None,start_time,end_time)
+            else:
+                exc=run(file_location,lip_flag,True,sub_flag,'fast',True,True,source_lang,start_time,end_time)
         
         if exc is not None:
             raise exc
         base_name, extension = os.path.splitext(vid_key)
         unique_filename = base_name + "_" + str(uuid.uuid4().hex) + extension
-        dubbed_bucket="dublr-dubbed-videos-bucket"
+        dubbed_bucket="dubbed-bucket"
         files=list_files_in_bucket(dubbed_bucket)
         while unique_filename in files:
             unique_filename = base_name + "_" + str(uuid.uuid4().hex) + extension
-        s3.upload_file('result/output.mp4',dubbed_bucket, unique_filename)
+        s3.upload_file('output.mp4',dubbed_bucket, unique_filename)
         print(f"Upload successful: {unique_filename} to {dubbed_bucket}")
-        #os.remove('result/output.mp4')
+        os.remove('output.mp4')
         return unique_filename
     except Exception as e:
         return e
 
+
+def send_email(RECIPIENT,text):
+
+    message = Mail(
+        from_email='info@dublr.ai',
+        to_emails=RECIPIENT,
+        subject='Video Dubbing Status',
+        html_content=f'<strong>{text}</strong>')
+    try:
+        sg = SendGridAPIClient(api_key=os.getenv('SENDGRID_API_KEY'))
+        response = sg.send(message)
+        print(response.status_code)
+        print(response.body)
+        print(response.headers)
+    except Exception as e:
+        print(e)
+
+
 # Continuously poll the queue for new messages
 async def main ():
-
-    client = MongoClient("mongodb+srv://umais:61VbcGUEktvxmCB4@cluster0.pyqqhxl.mongodb.net")
+    client = MongoClient(os.getenv("MONGO_URL"))
     db = client.get_database("user")
     collection = db.get_collection("Video")
 
-    while True:	
+    while True:
+        #print("in main")	
         response = sqs.receive_message(	
             QueueUrl=queue_url,		
             MaxNumberOfMessages=1,	
             WaitTimeSeconds=5  # Adjust as needed
-        )	
+        )
+
         if 'Messages' in response:	
 
             video_dubbing_time=None
@@ -84,19 +108,26 @@ async def main ():
                     jobId = data_dict['jobId']
                     query={'jobId':jobId}
                     result=collection.find_one(query) # Video
+                    print("result", result)
                     if result is None:
                         raise FileNotFoundError("No Entry For Video Found")
                     userId=result['userId']
                     originalVideoKey=result['originalVideoKey']
                     sourceLanguage = result['sourceLanguage']
+                    lip_flag=result['lipSync']
+                    sub_flag=result['generateSubtitles']
                     startTime = result['startTime']
                     endTime = result['endTime']
                     ###################################################################
                     video_dubbing_time = endTime - startTime
                     ###################################################################
                     update_status={"$set":{"processingStatus":"Processing"}}
+                    user_query={'_id': userId}
+                    users_collection = db.get_collection("User")
+                    result=users_collection.find_one(user_query)
+                    email=result['email']
                     collection.update_one(query,update_status)
-                    req = await process_video(originalVideoKey,sourceLanguage,startTime,endTime)
+                    req = await process_video(originalVideoKey,lip_flag,sub_flag,sourceLanguage,startTime,endTime)
                     if isinstance(req, str):
                         print("Unique Filename Generated")
                     elif isinstance(req,Exception):
@@ -108,8 +139,10 @@ async def main ():
                                                 "processedDate":current_time_milliseconds}}
                     collection.update_one(query,update_dubbedVideo)
                     sqs.delete_message(QueueUrl=queue_url,ReceiptHandle=receipt_handle)
+                    message="Your Video Has Been Dubbed Kindly Check Your Library"
+                    send_email(RECIPIENT=email,text=message)
             except Exception as e:
-                if e==FileNotFoundError("No Entry For Video Found"):
+                if str(e)=="No Entry For Video Found":
                     print("No Such Job or Video Found")
                     sqs.delete_message(QueueUrl=queue_url,ReceiptHandle=receipt_handle)
                 else:
@@ -122,25 +155,28 @@ async def main ():
                     collection.update_one(query,update_failed)
 
                     ######################################################################
-                    user_query={'userId': userId}
+                    user_query={'_id': userId}
                     time_update={'$inc': {'videoDubbedSeconds': -1*video_dubbing_time}}
                     users_collection = db.get_collection("User")
                     users_collection.update_one(user_query, time_update)
                     ######################################################################
 
                     sqs.delete_message(QueueUrl=queue_url,ReceiptHandle=receipt_handle)
+                    message="Unfortunately Your Video Could not be Processed Please Check Logs for More Details"
+                    send_email(RECIPIENT=email,text=message)
 
-
-#client = MongoClient("mongodb+srv://umais:61VbcGUEktvxmCB4@cluster0.pyqqhxl.mongodb.net")
+#user_query={'email': 'afzalmengal54@gmail.com'}
+#time_update={'$inc': {'videoDubbedSeconds': -1*58}}
+#client = MongoClient(os.getenv("MONGO_URL"))
 #db = client.get_database("user")
-#collection = db.get_collection("Video")
-#result=collection.find_one({'jobId': 'fad864ab-479d-467e-9e42-42a830c07cda'})
-#print(result)
-#client.close()
+#collection = db.get_collection("User")
+#collection.update_one(user_query,time_update)
 #cursor = collection.find()
 #for document in cursor:
-#    print(document)
+#   print(document)
 #client.close()
 
+#send_email(RECIPIENT="afzalmengal54@gmail.com",text='hello')
 asyncio.run(main())
 
+#send_email(RECIPIENT="afzalmengal54@gmail.com",message="Hello")
