@@ -1,36 +1,35 @@
 from dublr import *
 import time
-from moviepy.video.io.ffmpeg_tools import ffmpeg_extract_audio
-from moviepy.video.io.VideoFileClip import VideoFileClip
+from moviepy.video.io.ffmpeg_tools import ffmpeg_extract_audio, ffmpeg_extract_subclip
+from moviepy.tools import subprocess_call
+from moviepy.config import get_setting
 import multiprocessing
+import warnings
+import os
+warnings.filterwarnings('ignore')
 
-def run(video_path, lip_sync, audio_syn, subtitiles, preset, gan, video, SOURCE_LANG=None, start=None, end=None):
+def run(video_path, lip_sync, subtitiles, audio_syn=True, video=True, gan=True, SOURCE_LANG=None, start=None, end=None):
+    remove_data()
     try:
         audio_path = video_path
         if video:
             if not video_path.endswith('mp4'):
-                cmd = ['ffmpeg', '-i', video_path, '-q:v', '0', 'Data/input_video.mp4']
-                subprocess.run(cmd)
+                cmd = [get_setting("FFMPEG_BINARY"), "-y",
+                       '-i', video_path, 
+                       '-q:v', '0', 
+                       'Data/input_video.mp4'
+                       ]
+                subprocess_call(cmd)
                 #os.remove(video_path)
                 video_path = 'Data/input_video.mp4'
-            
-            clip = VideoFileClip(video_path, audio=False)
-            
-            if clip.rotation in (90, 270):
-                clip = clip.resize(clip.size[::-1])
-                clip.rotation = 0
             if start is not None and end is not None:
-                video = VideoFileClip(video_path).subclip(start, end)
-                file_extension = video_path.split(".")[-1]
-                video.write_videofile("Data/cropped_input_video." + file_extension, codec="libx264", fps=video.fps)
-                video_path = "Data/cropped_input_video." + file_extension
-            
+                ffmpeg_extract_subclip(video_path, start, end, "Data/cropped_input_video.mp4")
+                video_path = "Data/cropped_input_video.mp4"
             if os.path.exists(video_path):
                 print("Video File Exists\n")
             else:
                 raise FileNotFoundError("No Video File Found")
 
-            
             ffmpeg_extract_audio(video_path, "Data/input_video.wav", bitrate=SAMPLE_RATE)
             audio_path = "Data/input_video.wav"
             
@@ -45,39 +44,57 @@ def run(video_path, lip_sync, audio_syn, subtitiles, preset, gan, video, SOURCE_
         start = time.time()
         denoise(audio_path)
         end = time.time()
-        if os.path.exists('Data/vocals.wav'):
-            print("Denoise :", (end-start) / 60, "min\n")
+
+        if os.path.exists('Data/vocals.mp3'):
+            print("\nDenoise :", round((end-start) / 60, 2), "min\n")
         else:
             raise FileNotFoundError("Could not Denoise")
+        
+        # start = time.time()
+        # multi_speaker = speaker_detection(audio_path)
+        # end = time.time()
+
+        # if not multi_speaker:
+        #     print("Speaker Detection :", (end-start) / 60, "min\n")
+        # else:
+        #     raise AssertionError("Multiple speaker detected")
 
         start = time.time()
-        chunks, segments, sentences = create_segments('Data/vocals.wav')
+        chunks, segments, sentences = create_segments('Data/vocals.mp3')
         end = time.time()
         if chunks and segments and sentences:
-            print("Chunks :", (end-start) / 60, "min\n")
+            print("Chunks :", round((end-start) / 60, 2), "min\n")
         else:
             raise ValueError("Could Not Create Segments")
 
         start = time.time()
-        chunks, text, segments, sentences = transcript(chunks, segments, SOURCE_LANG, sentences, audio_path)
+        chunks, segments, sentences = transcript(chunks, segments, SOURCE_LANG, sentences, audio_path)
         end = time.time()
-        if text:
-            print("Transcription :", (end-start) / 60, "min\n")
+        
+        if sentences != 0:
+            print("Transcription :", round((end-start) / 60, 2), "min\n")
         else:
             raise ValueError("Could Not Transcribe")
 
         start = time.time()
-        chunks = translation(text, chunks, segments, SOURCE_LANG)
+        chunks = translation(chunks, segments, SOURCE_LANG)
         end = time.time()
-        print("Translation :", (end-start) / 60, "min\n")
+        print("Translation :", round((end-start) / 60, 2), "min\n")
 
-        end = time.time()
         if audio_syn:
             start = time.time()
-            audio_synthesis(chunks, segments, preset)
+            audio_synthesis(chunks, segments)
             end = time.time()
-            if os.path.exists("Full_Audio.wav"):
-                print("Audio :", (end-start) / 60, "min\n")
+            if os.path.exists("ClonedAudio") and os.listdir("ClonedAudio"):
+                print("Audio Generation :", round((end-start) / 60, 2), "min\n")
+            else:
+                raise FileNotFoundError("Could not Synthesize Audio")
+            
+            start = time.time()
+            audio_modification(chunks, segments)
+            end = time.time()
+            if os.path.exists("Full_Audio.wav") and os.path.exists("Full_vocals.wav"):
+                print("Audio Modification :", round((end-start) / 60, 2), "min\n")
             else:
                 raise FileNotFoundError("Could not Synthesize Audio")
 
@@ -88,12 +105,17 @@ def run(video_path, lip_sync, audio_syn, subtitiles, preset, gan, video, SOURCE_
                 start = time.time()
                 video_path = lipsync(video_path, gan)
                 end = time.time()
-                print("Lip Sync :", (end-start) / 60, "min\n")
+                print("Lip Sync :", round((end-start) / 60, 2), "min\n")
+            
+            start = time.time()
+            video_path = non_lipsync(video_path)
+            end = time.time()
+
+            if os.path.exists(video_path):
+                print("Merged :", round((end-start) / 60, 2), "min\n")
             else:
-                start = time.time()
-                video_path = non_lipsync(video_path)
-                end = time.time()
-                print("Non Lip Sync :", (end-start) / 60, "min\n")
+                raise FileNotFoundError("No Video File Found")
+            
 
         if subtitiles:
             start = time.time()
@@ -103,10 +125,6 @@ def run(video_path, lip_sync, audio_syn, subtitiles, preset, gan, video, SOURCE_
             else:
                 raise FileNotFoundError("Could not Generate SRT")
             
-            if os.path.exists(video_path):
-                print("Video File Exists\n")
-            else:
-                raise FileNotFoundError("No Video File Found")
             merge_srt_with_video(video_path, 'Data/sub.srt', 'output.mp4')
             os.remove(video_path)
             video_path = 'output.mp4'
@@ -117,13 +135,17 @@ def run(video_path, lip_sync, audio_syn, subtitiles, preset, gan, video, SOURCE_
             end = time.time()
             print("Subtitles :", (end-start) / 60, "min\n")
         else:
-            os.rename("lipsync.mp4","output.mp4")
-        remove_data()
+            os.rename("merged.mp4","output.mp4")
+        # remove_data()
         return None
     except Exception as e:
         print(str(e))
-        remove_data()
+        # remove_data()
         return e
 
 if __name__ == '__main__':
-    run('Videos/Ronaldo2.mp4', False, True, True, 'fast', True, True, "Portuguese", 14.0, 30.0)
+    start = time.time()
+    run(video_path='Videos/romi.mov', lip_sync=False, subtitiles=True, SOURCE_LANG="Urdu")
+    end = time.time()
+    print("Total :", round((end-start) / 60, 2), "min\n")
+# ,start=12,end=56.260633
