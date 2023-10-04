@@ -57,7 +57,7 @@ async def process_video(vid_key,lip_flag,sub_flag,source_lang,start_time, end_ti
         if exc is not None:
             raise exc
         base_name, _ = os.path.splitext(vid_key)
-        unique_filename = base_name + "_" + str(uuid.uuid4().hex)
+        unique_filename = vid_key
         dubbed_bucket="dubbed-bucket"
         files=list_files_in_bucket(dubbed_bucket)
         while unique_filename in files:

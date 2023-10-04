@@ -96,7 +96,7 @@ def run(video_path, lip_sync, subtitiles, audio_syn=True, video=True, gan=True, 
             if os.path.exists("Full_Audio.wav") and os.path.exists("Full_vocals.wav"):
                 print("Audio Modification :", round((end-start) / 60, 2), "min\n")
             else:
-                raise FileNotFoundError("Could not Synthesize Audio")
+                raise FileNotFoundError("Could not modify Audio")
 
         if video and audio_syn:
             #video_path = pad_parent.recv()
