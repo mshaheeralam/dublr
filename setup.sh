@@ -1,51 +1,31 @@
 #!/bin/bash
+
 mkdir Data
-pip install audiotsm
-pip install audio-separator
-sudo apt-get install libsndfile1 -y
-pip install --upgrade --no-deps --force-reinstall git+https://github.com/openai/whisper.git
-pip install tiktoken
-pip install moviepy
+pip install git+https://github.com/openai/whisper.git
+pip install transformers==4.29.2
+pip install --upgrade moviepy
+pip3 install -U scipy
+
 pip install pydub
 sudo apt install gcc -y
-pip install pytorch torchvision torchaudio pytorch-cuda==11.7 -c pytorch -c nvidia
-git clone https://github.com/neonbjb/tortoise-tts.git
+git clone https://github.com/152334H/tortoise-tts-fast
+mv tortoise-tts-fast tortoise-tts
 cd tortoise-tts
-pip3 install tqdm
-pip3 install rotary_embedding_torch
-pip3 install transformers==4.31.0
-pip3 install tokenizers
-pip3 install inflect
-pip3 install progressbar
-pip3 install einops==0.4.1
-pip3 install unidecode
-pip3 install scipy
-pip3 install librosa==0.9.1
-pip3 install ffmpeg
-pip3 install numpy
-pip3 install numba
-pip3 install torchaudio
-pip3 install threadpoolctl
-pip3 install llvmlite
-pip3 install appdirs
-pip3 install nbconvert==5.3.1
-pip3 install tornado==4.2
-pip3 install pydantic==1.9.1
-pip3 install deepspeed
-pip3 install py-cpuinfo
-pip3 install hjson
-pip3 install psutil
-python3 setup.py install
-pip install librosa
+pip install -r requirements.txt
+pip install -e .
+pip install git+https://github.com/152334H/BigVGAN.git
 cd ..
 mv tortoise-tts/tortoise tortoise
+mv tortoise-tts/static static
 rm -rf tortoise-tts 
 mkdir ClonedAudio
 mkdir ModifiedAudio
 mkdir AudioChunks
 
 env OPENAI_API_KEY=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
+env ORGANIZATION_ID=org-1ODchwRlVvrDaOmHpC07IcVa
 pip install openai
+pip install requests
 
 git clone https://github.com/PrabalS12/DeepFake-LipSync-AI-using-Wav2Lip.git
 mv DeepFake-LipSync-AI-using-Wav2Lip Wav2Lip
@@ -60,11 +40,12 @@ pip install opencv-python
 apt-get update && apt-get install libgl1 -y
 cd ..
 
-pip install pymongo
-pip install boto3
-
-pip uninstall torchaudio
-pip install --pre torchaudio --index-url https://download.pytorch.org/whl/nightly/cu118
-git clone https://github.com/isi-nlp/uroman.git
-pip install sox 
-pip install dataclasses 
+pip install git+https://github.com/Desklop/RNNoise_Wrapper
+sudo apt-get install autoconf libtool -y
+git clone https://github.com/Desklop/RNNoise_Wrapper
+cd RNNoise_Wrapper
+chmod +x compile_rnnoise.sh
+apt install unzip
+apt install make
+./compile_rnnoise.sh
+cd ..
