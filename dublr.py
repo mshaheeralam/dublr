@@ -9,7 +9,9 @@ from TTS.api import TTS
 import openai
 import gc
 import torch
+import subprocess
 import glob
+import requests
 import json
 from audiotsm import wsola
 from audiotsm.io.wav import WavReader, WavWriter
@@ -23,7 +25,7 @@ from aeneas.tools.execute_task import ExecuteTaskCLI
 
 load_dotenv()
 
-SILENCE_LEN= 500
+SILENCE_LEN= 250
 SILENCE_THRESH = 20
 SAMPLE_RATE = 22050 
 INAUDIBLE = "[INAUDIBLE]"
@@ -83,26 +85,73 @@ def padding(video_path, child):
     child.close()
 
 def denoise(audio_path):
-    cmd = ["python3", "-m", "demucs.separate", "-o", 'Data/', '--mp3', '--mp3-preset', '2', f'--mp3-bitrate={SAMPLE_RATE}', '--two-stems=vocals', audio_path]
+    cmd = ["python", "-m", "demucs.separate", "-o", 'Data/', '--mp3', '--mp3-preset', '2', f'--mp3-bitrate={SAMPLE_RATE}', '--two-stems=vocals', audio_path]
     subprocess_call(cmd)
     os.rename("Data/htdemucs/input_video/vocals.mp3", "Data/vocals.mp3")
     os.rename("Data/htdemucs/input_video/no_vocals.mp3", "Data/background.mp3")
     os.system("rm -rf Data/htdemucs")
-    os.system("ffmpeg -i Data/vocals.mp3 Data/vocals.wav -y")
-    os.system("ffmpeg -i Data/background.mp3 Data/background.wav -y")
+    cmd = [get_setting("FFMPEG_BINARY"), "-y",
+            '-i', 'Data/vocals.mp3', 
+            'Data/vocals.wav'
+            ]
+    subprocess_call(cmd)
+    cmd = [get_setting("FFMPEG_BINARY"), "-y",
+            '-i', 'Data/background.mp3', 
+            'Data/background.wav'
+            ]
+    subprocess_call(cmd)
 
 def speaker_detection(audio_path):
     pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization@2.1",
                                     use_auth_token="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")
-    diarization = pipeline(audio_path)
-    #print(diarization)
-    for _, _, speaker in diarization.itertracks(yield_label=True):
-        if int(speaker[-2:]) > 0:
-            return True
+    pipeline.to(torch.device("cuda"))
 
-    return False
+    diarization = pipeline(audio_path)
+    multi_speaker = False
+    num_speakers = 0
+    chunks = []
+    print("")
+    for turn, _, speaker in diarization.itertracks(yield_label=True):
+        print(f"Start: {round(turn.start, 2)}\tStop: {round(turn.end, 2)}\tID: {speaker}")
+        chunks.append({"Start": turn.start, "Stop": turn.end, "Speech Duration": turn.end - turn.start})
+        num_speakers = max(num_speakers, int(str(speaker)[-2:]))
+        if num_speakers > 0:
+            multi_speaker = True
+
+    print(f"{num_speakers+1} speakers found\n")
+        # if multi_speaker:
+        #     speakers[0]["Start"] = chunks[i]["Start"]
+        #     speakers[-1]["Stop"] = chunks[i]["Stop"]
+
+        #     for speaker in speakers:
+        #         new_chunks.append({"Start": speaker["Start"], "Stop": speaker["Stop"], "Speech Duration": speaker["Stop"] - speaker["Start"], 
+        #                        "Duration": speaker["Stop"] - speaker["Start"], "Speech": chunks[i]["Speech"], "Synthesis": chunks[i]["Synthesis"]})
+                
+            # del chunks[i]
+            # segments -= 1
+        # else:
+        #     new_chunks.append(chunks[i])
+
+    # chunks = new_chunks
+    # segments = len(new_chunks)
+
+    # os.system("rm -rf AudioChunks")
+    # os.mkdir("AudioChunks")
+
+    # myaudio = AudioSegment.from_mp3(audio_path)
+    # for i in range(segments):  
+    #     clip = myaudio[chunks[i]["Start"]*1000:chunks[i]["Stop"]*1000]
+    #     chunks[i]["Path"] = f"AudioChunks/{i}.wav"
+    #     clip.export(f"AudioChunks/{i}.wav", format="wav")
+    
+    # for i in range(segments-1):
+    #     chunks[i]['Stop'] = chunks[i+1]['Start']
+
+    # chunks[-1]['Stop'] = myaudio.duration_seconds
+
+    return chunks
         
-def create_segments(audio_path):
+def create_segments(chunks, audio_path):
     myaudio = AudioSegment.from_mp3(audio_path)
     dBFS= myaudio.dBFS
 
@@ -152,18 +201,12 @@ def create_segments(audio_path):
 
 def transcript(chunks, segments, SOURCE_LANG, sentences, audio_path):
 
-    whispermodel = whisper.load_model('small')
     myaudio = AudioSegment.from_wav(audio_path)
     count = 0
     while count < segments:
         if chunks[count]['Speech']:
-            audio = whisper.load_audio(chunks[count]["Path"])
-            audio = whisper.pad_or_trim(audio)
-            mel = whisper.log_mel_spectrogram(audio).to(whispermodel.device)
-            _, probs = whispermodel.detect_language(mel)
-            chunks[count]['Language'] = max(probs, key=probs.get)
-
-            transcription = whispermodel.transcribe(chunks[count]["Path"], language = LANG.get(chunks[count]['Language'], SOURCE_LANG))
+        
+            transcription = openai.Audio.transcribe("whisper-1", open(chunks[count]["Path"], "rb"))
 
             if len(transcription["text"]) < 10:
                 if count == 0 and segments > 1:
@@ -192,7 +235,7 @@ def transcript(chunks, segments, SOURCE_LANG, sentences, audio_path):
     while count < segments:
         if chunks[count]['Speech']:
             chunks[count]['Duration'] = chunks[count]['Stop'] - chunks[count]['Start']
-            if len(chunks[count]["Text"]) / (chunks[count]['Stop'] - chunks[count]['Start']) > 25:
+            if len(chunks[count]["Text"]) // (chunks[count]['Stop'] - chunks[count]['Start']) > 25:
                 chunks[count]["Text"] = INAUDIBLE
         count += 1
 
@@ -210,19 +253,14 @@ def translation(chunks, segments, SOURCE_LANG):
     for i in range(segments):
         #print(chunks[i])
         if chunks[i]['Speech']:
-            if chunks[i]['Language'] != 'en' and chunks[i]['Text'] != INAUDIBLE:
-                if SOURCE_LANG or LANG.get(chunks[i]['Language']):
-                    prompt = f" from {LANG.get(chunks[i]['Language'], SOURCE_LANG)}"
-                else:
-                    prompt = ""
-
+            if chunks[i]['Text'] != INAUDIBLE:
                 completion = openai.ChatCompletion.create(
-                    model="gpt-4",
+                    model="gpt-3.5-turbo",
                     messages=[{"role": "user", "content": f"Sentence: {chunks[i]['Text']}"}],
                         functions=[
                         {
                             "name": 'translate',
-                            "description": f"""Translates a sentence{prompt} to English ensuring:
+                            "description": f"""Translates a sentence to English ensuring:
                                 - The translated length is similar to the original.
                                 - Modern English vocabulary is used, avoiding outdated terms.
                                 - The translation maintains the original context and meaning.""",
@@ -245,13 +283,13 @@ def translation(chunks, segments, SOURCE_LANG):
                 data = json.loads(data)
                 chunks[i]['Translation'] = data['translated_text']
             else:
-                print(f"Not Translated: {chunks[i]['Text']}")
+                print(f"Not Translated")
                 chunks[i]['Translation'] = chunks[i]['Text']
-            print(f"Orignial: {chunks[i]['Text']}\nTranslated: {chunks[i]['Translation']}\nLanguage: {chunks[i]['Language']}\nStart: {chunks[i]['Start']}\tStop: {chunks[i]['Stop']}\n")
+            print(f"Orignial: {chunks[i]['Text']}\nTranslated: {chunks[i]['Translation']}\nStart: {chunks[i]['Start']}\tStop: {chunks[i]['Stop']}\n")
     return chunks
 
 def audio_synthesis(chunks, segments):    
-    tts = TTS("tts_models/multilingual/multi-dataset/xtts_v1", gpu=True)
+    tts = TTS("tts_models/multilingual/multi-dataset/xtts_v1").to('cuda')
 
     vocals = AudioSegment.from_wav("Data/vocals.wav")
 
@@ -274,27 +312,23 @@ def audio_synthesis(chunks, segments):
     
     for i in range(segments):
         print(f"Speech Duration: {round(file_path[i]['Speech Duration'], 2)}\tChunk Duration: {round(file_path[i]['Duration'], 2)}\tFile: {file_path[i]['Path']}")
-    
-    # print(FILE_PATH)
-    # for i in range(segments):
-    #     print(file_path)
 
-    # audio = AudioSegment.from_wav(files)
-    # cond_len = 0
-    # if int(audio.duration_seconds) // 3 > 3:
-    #     cond_len = int(audio.duration_seconds) // 3
-    # else:
-    #     cond_len = 3
-    # print("\ncond len: ",cond_len)
+    audio = AudioSegment.from_wav(files)
+    cond_len = 0
+    if int(audio.duration_seconds) // 3 > 3:
+        cond_len = int(audio.duration_seconds) // 3
+    else:
+        cond_len = 3
+    print("\ncond len: ",cond_len)
     
     for i in range(segments):
         if chunks[i]['Speech']:
             if chunks[i]['Text'] != INAUDIBLE:
                 try:
                     tts.tts_to_file(text=chunks[i]["Translation"], file_path=f"ClonedAudio/{i}_generated.wav", 
-                                    speaker_wav=files, language="en", gpt_cond_len=3, decoder_iterations=150,
-                                    temperature=1e-05, top_p=0.95, top_k=100)
-                except:
+                                    speaker_wav=files, language="en", gpt_cond_len=cond_len, decoder_iterations=150)
+                except Exception as e:
+                    print(str(e))
                     print("CUDA OFFFFFFFFFFFFFF\n")
                     exit()
     gc.collect()
@@ -313,14 +347,15 @@ def audio_modification(chunks, segments):
                 gen_audio = gen_audio + addsilence
             else:
                 with WavReader(f"ClonedAudio/{i}_generated.wav") as reader:
-                    with WavWriter(f"ClonedAudio/{i}_generatedspeed.wav", reader.channels, reader.samplerate) as writer:
+                    with WavWriter(f"ModifiedAudio/{i}_adjusted_audio.wav", reader.channels, reader.samplerate) as writer:
                         tsm = wsola(reader.channels, speed = (gen_audio.duration_seconds/original_audio_duration))
                         tsm.run(reader, writer)
-                gen_audio = AudioSegment.from_wav(f"ClonedAudio/{i}_generatedspeed.wav")
+                #gen_audio = AudioSegment.from_wav(f"ClonedAudio/{i}_generatedspeed.wav")
         else:
             gen_audio = AudioSegment.silent(duration=(chunks[i]["Stop"] - chunks[i]["Start"])* 1000)
-            
-        gen_audio.export(f"ModifiedAudio/{i}_adjusted_audio.wav", format="wav")
+        
+        if not os.path.exists(f"ModifiedAudio/{i}_adjusted_audio.wav"):
+            gen_audio.export(f"ModifiedAudio/{i}_adjusted_audio.wav", format="wav")
 
 
     segment = AudioSegment.silent(duration=(chunks[0]['Start'] - 0.0) * 1000)
@@ -351,7 +386,17 @@ def lipsync(video_path, gan=True):
         checkpoint = "checkpoints/wav2lip_gan.pth"
     else:
         checkpoint = "checkpoints/wav2lip.pth"
-    os.system(f"cd Wav2Lip && python inference.py --checkpoint_path {checkpoint} --face {video_file} --audio {audio_file} --outfile {result_file}")
+
+    cmd = [
+    "python", "inference.py",
+    "--checkpoint_path", checkpoint,
+    "--face", video_file,
+    "--audio", audio_file,
+    "--outfile", result_file
+    ]
+
+    subprocess.run(cmd, cwd="Wav2Lip")
+    #os.system(f"cd Wav2Lip && python inference.py --checkpoint_path {checkpoint} --face {video_file} --audio {audio_file} --outfile {result_file}")
     gc.collect()
     torch.cuda.empty_cache()
     
@@ -458,4 +503,3 @@ def remove_data():
         files = glob.glob(folder_path)
         for f in files:
             os.remove(f)
-
