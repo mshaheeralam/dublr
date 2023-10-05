@@ -44,37 +44,34 @@ def run(video_path, lip_sync, subtitiles, audio_syn=True, video=True, gan=True, 
         start = time.time()
         denoise(audio_path)
         end = time.time()
-
-        if os.path.exists('Data/vocals.mp3'):
+        if os.path.exists('Data/vocals.wav'):
             print("\nDenoise :", round((end-start) / 60, 2), "min\n")
         else:
             raise FileNotFoundError("Could not Denoise")
-        
-        # start = time.time()
-        # multi_speaker = speaker_detection(audio_path)
-        # end = time.time()
-
-        # if not multi_speaker:
-        #     print("Speaker Detection :", (end-start) / 60, "min\n")
-        # else:
-        #     raise AssertionError("Multiple speaker detected")
 
         start = time.time()
-        chunks, segments, sentences = create_segments('Data/vocals.mp3')
+        chunks = speaker_detection('Data/vocals.wav')
+        end = time.time()
+        if True:
+            print("Speaker Detection :", (end-start) / 60, "min\n")
+        else:
+            raise AssertionError("Could not detect speakers")
+        
+        start = time.time()
+        chunks, segments, sentences = create_segments(chunks, 'Data/vocals.wav')
         end = time.time()
         if chunks and segments and sentences:
             print("Chunks :", round((end-start) / 60, 2), "min\n")
         else:
-            raise ValueError("Could Not Create Segments")
+            raise ValueError("Could not create segments")
 
         start = time.time()
         chunks, segments, sentences = transcript(chunks, segments, SOURCE_LANG, sentences, audio_path)
         end = time.time()
-        
         if sentences != 0:
             print("Transcription :", round((end-start) / 60, 2), "min\n")
         else:
-            raise ValueError("Could Not Transcribe")
+            raise ValueError("Could not transcribe")
 
         start = time.time()
         chunks = translation(chunks, segments, SOURCE_LANG)
@@ -88,7 +85,7 @@ def run(video_path, lip_sync, subtitiles, audio_syn=True, video=True, gan=True, 
             if os.path.exists("ClonedAudio") and os.listdir("ClonedAudio"):
                 print("Audio Generation :", round((end-start) / 60, 2), "min\n")
             else:
-                raise FileNotFoundError("Could not Synthesize Audio")
+                raise FileNotFoundError("Could not synthesize audio")
             
             start = time.time()
             audio_modification(chunks, segments)
@@ -96,7 +93,7 @@ def run(video_path, lip_sync, subtitiles, audio_syn=True, video=True, gan=True, 
             if os.path.exists("Full_Audio.wav") and os.path.exists("Full_vocals.wav"):
                 print("Audio Modification :", round((end-start) / 60, 2), "min\n")
             else:
-                raise FileNotFoundError("Could not modify Audio")
+                raise FileNotFoundError("Could not modify audio")
 
         if video and audio_syn:
             #video_path = pad_parent.recv()
@@ -105,7 +102,10 @@ def run(video_path, lip_sync, subtitiles, audio_syn=True, video=True, gan=True, 
                 start = time.time()
                 video_path = lipsync(video_path, gan)
                 end = time.time()
-                print("Lip Sync :", round((end-start) / 60, 2), "min\n")
+                if os.path.exists("lipsync.mp4"):
+                    print("Lip Sync :", round((end-start) / 60, 2), "min\n")
+                else:
+                    raise FileNotFoundError("No Video File Found")
             
             start = time.time()
             video_path = non_lipsync(video_path)
@@ -145,7 +145,7 @@ def run(video_path, lip_sync, subtitiles, audio_syn=True, video=True, gan=True, 
 
 if __name__ == '__main__':
     start = time.time()
-    run(video_path='Videos/romi.mov', lip_sync=False, subtitiles=True, SOURCE_LANG="Urdu")
+    run(video_path='Videos/Spanish.mp4', lip_sync=False, subtitiles=True, SOURCE_LANG="Urdu")
     end = time.time()
     print("Total :", round((end-start) / 60, 2), "min\n")
 # ,start=12,end=56.260633
