@@ -1,4 +1,4 @@
-import whisper
+#import whisper
 from moviepy.editor import VideoFileClip, clips_array, ColorClip
 from moviepy.tools import subprocess_call
 from moviepy.config import get_setting
@@ -25,7 +25,7 @@ from aeneas.tools.execute_task import ExecuteTaskCLI
 
 load_dotenv()
 
-SILENCE_LEN= 250
+SILENCE_LEN= 500
 SILENCE_THRESH = 20
 SAMPLE_RATE = 22050 
 INAUDIBLE = "[INAUDIBLE]"
@@ -151,7 +151,7 @@ def speaker_detection(audio_path):
 
     return chunks
         
-def create_segments(chunks, audio_path):
+def create_segments(audio_path):
     myaudio = AudioSegment.from_mp3(audio_path)
     dBFS= myaudio.dBFS
 
@@ -180,9 +180,9 @@ def create_segments(chunks, audio_path):
             segments -= 1
         else:
             count += 1
-    # print("")
-    # for i in range(segments):
-    #     print(chunks[i])
+    print("")
+    for i in range(segments):
+        print(chunks[i])
 
     for i in range(segments):  
         clip = myaudio[chunks[i]["Start"]*1000:chunks[i]["Stop"]*1000]
@@ -243,9 +243,9 @@ def transcript(chunks, segments, SOURCE_LANG, sentences, audio_path):
     torch.cuda.empty_cache()
 
 
-    # print("")
-    # for i in range(segments):
-    #     print(chunks[i])
+    print("")
+    for i in range(segments):
+        print(chunks[i])
 
     return chunks, segments, sentences
 
@@ -255,7 +255,7 @@ def translation(chunks, segments, SOURCE_LANG):
         if chunks[i]['Speech']:
             if chunks[i]['Text'] != INAUDIBLE:
                 completion = openai.ChatCompletion.create(
-                    model="gpt-3.5-turbo",
+                    model="gpt-4",
                     messages=[{"role": "user", "content": f"Sentence: {chunks[i]['Text']}"}],
                         functions=[
                         {
@@ -289,9 +289,9 @@ def translation(chunks, segments, SOURCE_LANG):
     return chunks
 
 def audio_synthesis(chunks, segments):    
-    tts = TTS("tts_models/multilingual/multi-dataset/xtts_v1").to('cuda')
+    tts = TTS("tts_models/multilingual/multi-dataset/xtts_v1", gpu=True)
 
-    vocals = AudioSegment.from_wav("Data/vocals.wav")
+    # vocals = AudioSegment.from_wav("Data/vocals.wav")
 
     file_path = sorted(chunks, key=lambda x: x['Speech Duration'], reverse=True)
     files = [chunk['Path'] for chunk in file_path if chunk['Synthesis'] and chunk['Speech'] and chunk['Speech Duration'] > 5]
@@ -299,14 +299,14 @@ def audio_synthesis(chunks, segments):
     if not files:
         files = [chunk['Path'] for chunk in file_path if chunk['Speech'] and chunk['Speech Duration'] > 5]
         if not files:
-            files = [chunk['Path'] for chunk in file_path if chunk['Speech'] and chunk['Duration'] > 5]
-            if not files:
-                clip = vocals[file_path[0]["Start"]*1000:file_path[0]["Stop"]*1000]
-                for i in range(1,len(file_path[:1])):
-                    clip += vocals[file_path[i]["Start"]*1000:file_path[i]["Stop"]*1000]
-                clip.export("Data/Speech.wav", format="wav")
-                files = ['Data/Speech.wav']
-
+            # files = [chunk['Path'] for chunk in file_path if chunk['Speech'] and chunk['Duration'] > 5]
+            # if not files:
+                # clip = vocals[file_path[0]["Start"]*1000:file_path[0]["Stop"]*1000]
+                # for i in range(1,len(file_path[:1])):
+                #     clip += vocals[file_path[i]["Start"]*1000:file_path[i]["Stop"]*1000]
+                # clip.export("Data/Speech.wav", format="wav")
+            files = ['Data/vocals.wav']
+    
     files = files[0]
     print("\nFILE: ", files)
     
@@ -316,7 +316,7 @@ def audio_synthesis(chunks, segments):
     audio = AudioSegment.from_wav(files)
     cond_len = 0
     if int(audio.duration_seconds) // 3 > 3:
-        cond_len = int(audio.duration_seconds) // 3
+        cond_len = (int(audio.duration_seconds) // 3)  
     else:
         cond_len = 3
     print("\ncond len: ",cond_len)
@@ -326,7 +326,7 @@ def audio_synthesis(chunks, segments):
             if chunks[i]['Text'] != INAUDIBLE:
                 try:
                     tts.tts_to_file(text=chunks[i]["Translation"], file_path=f"ClonedAudio/{i}_generated.wav", 
-                                    speaker_wav=files, language="en", gpt_cond_len=cond_len, decoder_iterations=150)
+                                    speaker_wav=files, language="en",gpt_cond_len=cond_len,decoder_iterations=150)
                 except Exception as e:
                     print(str(e))
                     print("CUDA OFFFFFFFFFFFFFF\n")
@@ -338,25 +338,29 @@ def audio_modification(chunks, segments):
 
     for i in range(segments):
         if chunks[i]['Speech'] and chunks[i]['Text'] != INAUDIBLE:
-            original_audio_duration = chunks[i]['Stop'] - chunks[i]['Start']
+            original_audio_duration = chunks[i]['Duration']
             gen_audio = AudioSegment.from_wav(f"ClonedAudio/{i}_generated.wav")
 
             if gen_audio.duration_seconds < original_audio_duration:
                 chunks[i]['Stop'] = chunks[i]['Start'] + gen_audio.duration_seconds
                 addsilence = AudioSegment.silent(duration=(original_audio_duration - gen_audio.duration_seconds) * 1000)
-                gen_audio = gen_audio + addsilence
+                modified_audio = gen_audio + addsilence
             else:
                 with WavReader(f"ClonedAudio/{i}_generated.wav") as reader:
-                    with WavWriter(f"ModifiedAudio/{i}_adjusted_audio.wav", reader.channels, reader.samplerate) as writer:
-                        tsm = wsola(reader.channels, speed = (gen_audio.duration_seconds/original_audio_duration))
+                    with WavWriter(f"ClonedAudio/{i}_generatedspeed.wav", reader.channels, reader.samplerate) as writer:
+                        tsm = wsola(reader.channels, speed = gen_audio.duration_seconds/original_audio_duration)
                         tsm.run(reader, writer)
-                #gen_audio = AudioSegment.from_wav(f"ClonedAudio/{i}_generatedspeed.wav")
+            
+                modified_audio = AudioSegment.from_wav(f"ClonedAudio/{i}_generatedspeed.wav")
+                if modified_audio.duration_seconds < original_audio_duration:
+                    addsilence = AudioSegment.silent(duration=(original_audio_duration - modified_audio.duration_seconds) * 1000)
+                    modified_audio = modified_audio + addsilence
         else:
-            gen_audio = AudioSegment.silent(duration=(chunks[i]["Stop"] - chunks[i]["Start"])* 1000)
+            modified_audio = AudioSegment.silent(duration=(chunks[i]['Duration'])* 1000)
         
-        if not os.path.exists(f"ModifiedAudio/{i}_adjusted_audio.wav"):
-            gen_audio.export(f"ModifiedAudio/{i}_adjusted_audio.wav", format="wav")
-
+        # if not os.path.exists(f"ModifiedAudio/{i}_adjusted_audio.wav"):
+        modified_audio.export(f"ModifiedAudio/{i}_adjusted_audio.wav", format="wav")
+        print(f"Original: {round(original_audio_duration, 2)}\tGenerated: {round(gen_audio.duration_seconds, 2)}\tModified: {round(modified_audio.duration_seconds, 2)}")
 
     segment = AudioSegment.silent(duration=(chunks[0]['Start'] - 0.0) * 1000)
     for i in range(segments):
@@ -445,13 +449,7 @@ def chunks_to_srt(chunks, segments, srt_filename):
     
                 with open(data_path, "r") as f:
                     data = json.load(f)
-                # json_trans = json.dumps(data, indent = 1, ensure_ascii=False)
-                # f = open(data_path, "w", encoding='utf-8')
-                # f.write(json_trans)
-                # f.close()
-                # with open(data_path, "r", encoding="utf-8") as f:
-                #     data = json.load(f)
-                #print(data['fragments'])
+
                 for j in range(len(data["fragments"])):
                     
                     start_time = seconds_to_srt_time(chunks[i]['Start'] + float(data["fragments"][j]["begin"]))

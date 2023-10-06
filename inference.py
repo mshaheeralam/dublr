@@ -49,16 +49,16 @@ def run(video_path, lip_sync, subtitiles, audio_syn=True, video=True, gan=True, 
         else:
             raise FileNotFoundError("Could not Denoise")
 
-        start = time.time()
-        chunks = speaker_detection('Data/vocals.wav')
-        end = time.time()
-        if True:
-            print("Speaker Detection :", (end-start) / 60, "min\n")
-        else:
-            raise AssertionError("Could not detect speakers")
+        # start = time.time()
+        # chunks = speaker_detection('Data/vocals.wav')
+        # end = time.time()
+        # if True:
+        #     print("Speaker Detection :", (end-start) / 60, "min\n")
+        # else:
+        #     raise AssertionError("Could not detect speakers")
         
         start = time.time()
-        chunks, segments, sentences = create_segments(chunks, 'Data/vocals.wav')
+        chunks, segments, sentences = create_segments('Data/vocals.wav')
         end = time.time()
         if chunks and segments and sentences:
             print("Chunks :", round((end-start) / 60, 2), "min\n")
@@ -145,7 +145,7 @@ def run(video_path, lip_sync, subtitiles, audio_syn=True, video=True, gan=True, 
 
 if __name__ == '__main__':
     start = time.time()
-    run(video_path='Videos/Spanish.mp4', lip_sync=False, subtitiles=True, SOURCE_LANG="Urdu")
+    run(video_path='Videos/Japanese.mp4', lip_sync=False, subtitiles=True, SOURCE_LANG="Urdu")
     end = time.time()
     print("Total :", round((end-start) / 60, 2), "min\n")
 # ,start=12,end=56.260633
