@@ -173,9 +173,9 @@ def create_segments(audio_path):
             segments -= 1
         else:
             count += 1
-    # print("")
-    # for i in range(segments):
-    #     print(chunks[i])
+    print("")
+    for i in range(segments):
+        print(chunks[i])
 
     for i in range(segments):  
         clip = myaudio[chunks[i]["Start"]*1000:chunks[i]["Stop"]*1000]
@@ -236,9 +236,9 @@ def transcript(chunks, segments, SOURCE_LANG, sentences, audio_path):
     torch.cuda.empty_cache()
 
 
-    # print("")
-    # for i in range(segments):
-    #     print(chunks[i])
+    print("")
+    for i in range(segments):
+        print(chunks[i])
 
     return chunks, segments, sentences
 
@@ -248,7 +248,7 @@ def translation(chunks, segments, SOURCE_LANG):
         if chunks[i]['Speech']:
             if chunks[i]['Text'] != INAUDIBLE:
                 completion = openai.ChatCompletion.create(
-                    model="gpt-3.5-turbo",
+                    model="gpt-4",
                     messages=[{"role": "user", "content": f"Sentence: {chunks[i]['Text']}"}],
                         functions=[
                         {
