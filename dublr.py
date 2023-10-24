@@ -1,12 +1,7 @@
-import whisper
-from moviepy.editor import VideoFileClip, AudioFileClip, CompositeVideoClip, clips_array, ColorClip, TextClip
-from moviepy.video.tools.subtitles import SubtitlesClip
 from moviepy.tools import subprocess_call
 from moviepy.config import get_setting
-import moviepy.video.fx.all as vfx
 from pydub import AudioSegment, silence
 import os
-#from TTS.api import TTS
 import openai
 import gc
 import torch
@@ -16,8 +11,6 @@ import time
 import json
 from audiotsm import wsola
 from audiotsm.io.wav import WavReader, WavWriter
-from audio_separator import Separator
-from pyannote.audio import Pipeline
 from dotenv import load_dotenv
 import nltk
 nltk.download('punkt') 
@@ -38,75 +31,17 @@ INAUDIBLE = "[INAUDIBLE]"
 openai.api_key = os.getenv("OPENAIKEY")
 set_api_key(os.getenv("11LABs"))
 
-LANG = {
-    'ar': 'Arabic',
-    'eu': 'Basque',
-    'be': 'Belarusian',
-    'bn': 'Bengali',
-    'ca': 'Catalan',
-    'zh': 'Chinese',
-    'hr': 'Croatian',
-    'cs': 'Czech',
-    'da': 'Danish',
-    'nl': 'Dutch',
-    'en': 'English',
-    'fi': 'Finnish',
-    'fr': 'French',
-    'de': 'German',
-    'el': 'Greek',
-    'he': 'Hebrew',
-    'hi': 'Hindi',
-    'hu': 'Hungarian',
-    'ga': 'Irish',
-    'it': 'Italian',
-    'ja': 'Japanese',
-    'ko': 'Korean',
-    'la': 'Latin',
-    'fa': 'Persian',
-    'pl': 'Polish',
-    'pt': 'Portuguese',
-    'ru': 'Russian',
-    'sr': 'Serbian',
-    'es': 'Spanish',
-    'tr': 'Turkish',
-    'ts': 'Tsonga',
-    'ur': 'Urdu'}
-
-def padding(video_path, child):
-    clip = VideoFileClip(video_path, audio=False)
-    
-    if clip.rotation in (90, 270):
-        clip = clip.resize(clip.size[::-1])
-        clip.rotation = 0
-    
-    if clip.aspect_ratio < 1:
-        print("Vertical video found. Changing to 16:9\n")
-        pad = ColorClip(size=clip.size, color=(0, 0, 0), duration=clip.duration)
-        clips = [[pad, clip, pad]]
-        stacked = clips_array(clips)
-        clip = vfx.resize(stacked, (1280, 720))
-        clip.write_videofile("Data/padded.mp4", audio=False)
-        video_path = "Data/padded.mp4"
-    
-    child.send(video_path)
-    child.close()
-
 def denoise(audio_path):
-    separator = Separator(audio_path, model_name='UVR-MDX-NET-Voc_FT', denoise_enabled=False, output_dir="Data", use_cuda=True)
-    primary_stem_path, secondary_stem_path = separator.separate()
-    os.rename(f"Data/{primary_stem_path}", "Data/vocals.wav")
-    os.rename(f"Data/{secondary_stem_path}", "Data/background.wav")
+    cmd = ["python", "-m", "demucs.separate", "-o", 'Data/', '--mp3', '--mp3-preset', '2', f'--mp3-bitrate={SAMPLE_RATE}', '--two-stems=vocals', audio_path]
+    subprocess_call(cmd)
+    os.rename("Data/htdemucs/input_video/vocals.mp3", "Data/vocals.mp3")
+    os.rename("Data/htdemucs/input_video/no_vocals.mp3", "Data/background.mp3")
+    os.system("rm -rf Data/htdemucs")
+    cmd = [get_setting("FFMPEG_BINARY"), "-y", '-i', 'Data/vocals.mp3', 'Data/vocals.wav']
+    subprocess_call(cmd)
+    cmd = [get_setting("FFMPEG_BINARY"), "-y", '-i', 'Data/background.mp3', 'Data/background.wav']
+    subprocess_call(cmd)
 
-def speaker_detection(audio_path):
-    pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization@2.1",
-                                    use_auth_token="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")
-    diarization = pipeline(audio_path)
-    #print(diarization)
-    for _, _, speaker in diarization.itertracks(yield_label=True):
-        if int(speaker[-2:]) > 0:
-            return True
-
-    return False
         
 def create_segments(audio_path):
     myaudio = AudioSegment.from_wav(audio_path)
@@ -156,37 +91,15 @@ def create_segments(audio_path):
 
     return chunks, segments, sentences
 
-def transcript(chunks, segments, SOURCE_LANG, sentences, audio_path):
-    url = "https://api.openai.com/v1/audio/transcriptions"
-    headers = {"Authorization": f"Bearer {openai.api_key}"}
-    data = {"model": "whisper-1"}
-    whispermodel = whisper.load_model('small')
+def transcript(chunks, segments, audio_path):
+
     myaudio = AudioSegment.from_wav(audio_path)
     count = 0
     while count < segments:
         if chunks[count]['Speech']:
-            audio = whisper.load_audio(chunks[count]["Path"])
-            audio = whisper.pad_or_trim(audio)
-            mel = whisper.log_mel_spectrogram(audio).to(whispermodel.device)
-            _, probs = whispermodel.detect_language(mel)
-            chunks[count]['Language'] = max(probs, key=probs.get)
-            files = {"file": open(chunks[count]["Path"], "rb")}
-            if LANG.get(chunks[count]['Language']):
-                
-                data['language'] = chunks[count]['Language']
-                response = requests.post(url, headers=headers, files=files, data=data)
-                #transcription = whispermodel.transcribe(chunks[count]["Path"], language = LANG.get(chunks[count]['Language']))
-            elif SOURCE_LANG:
-                data['language'] = SOURCE_LANG
-                response = requests.post(url, headers=headers, files=files, data=data)
-                #transcription = whispermodel.transcribe(chunks[count]["Path"], language = SOURCE_LANG)
-            else:
-                data['language'] = None
-                response = requests.post(url, headers=headers, files=files, data=data)
-                #transcription = whispermodel.transcribe(chunks[count]["Path"])
+        
+            transcription = openai.Audio.transcribe("whisper-1", open(chunks[count]["Path"], "rb"))
 
-            #print(response.json())
-            transcription = response.json()
             if len(transcription["text"]) < 10:
                 if count == 0 and segments > 1:
                     chunks[count+1]['Start'] = chunks[count]['Start']
@@ -214,7 +127,7 @@ def transcript(chunks, segments, SOURCE_LANG, sentences, audio_path):
     while count < segments:
         if chunks[count]['Speech']:
             chunks[count]['Duration'] = chunks[count]['Stop'] - chunks[count]['Start']
-            if len(chunks[count]["Text"]) / (chunks[count]['Stop'] - chunks[count]['Start']) > 25:
+            if len(chunks[count]["Text"]) // (chunks[count]['Stop'] - chunks[count]['Start']) > 25:
                 chunks[count]["Text"] = INAUDIBLE
         count += 1
 
@@ -226,64 +139,45 @@ def transcript(chunks, segments, SOURCE_LANG, sentences, audio_path):
     # for i in range(segments):
     #     print(chunks[i])
 
-    return chunks, segments, sentences
+    return chunks, segments
 
 
-def translation(chunks, segments, SOURCE_LANG):
+def translation(chunks, segments, SOURCE_LANG, TAR_LANG):
+
+    manifest = {"data": []}
+
     for i in range(segments):
-        #print(chunks[i])
         if chunks[i]['Speech']:
-            if chunks[i]['Language'] != 'en' or chunks[i]['Text'] != INAUDIBLE:
-                if SOURCE_LANG or LANG.get(chunks[i]['Language']):
-                    completion = openai.ChatCompletion.create(
-                    model="gpt-4",
-                    messages=[{"role": "user", "content": f"Sentence: {chunks[i]['Text']}"}],
-                        functions=[
-                        {
-                            "name": 'translate',
-                            "description": f"""Translates a sentence from {LANG.get(chunks[i]['Language'], SOURCE_LANG)} to English ensuring:
-                                - The translated length is similar to the original.
-                                - Modern English vocabulary is used, avoiding outdated terms.
-                                - The translation maintains the original context and meaning.""",
-                            "parameters": {
-                                "type": 'object',
-                                "properties": {
-                                    "translated_text": {
-                                        'type': 'string',
-                                        'description': 'Translated text string'
-                                    }
-                                },
-                                "required": ["translated_text"]
-                            }
-                        }
-                        ],
-                        function_call={"name": "translate"},
-                    )
+            if chunks[i]['Text'] != INAUDIBLE:
+                if SOURCE_LANG:
+                    description = f"Translates a sentence from {SOURCE_LANG} to {TAR_LANG} ensuring:"
                 else:
-                    completion = openai.ChatCompletion.create(
-                    model="gpt-4",
-                    messages=[{"role": "user", "content": f"Sentence: {chunks[i]['Text']}"}],
-                        functions=[
-                        {
-                            "name": "translate",
-                            "description": F""""Translates a sentence to English ensuring:
-                                - The translated length is similar to the original.
-                                - Modern English vocabulary is used, avoiding outdated terms.
-                                - The translation maintains the original context and meaning.""",
-                            "parameters": {
-                                "type": "object",
-                                "properties": {
-                                    "translated_text": {
-                                        "type": "string",
-                                        "description": "Translated text string"
-                                    }
-                                },
-                                "required": ["translated_text"]
-                            }
+                    description = f"Translates a sentence from to {TAR_LANG} ensuring:"
+                completion = openai.ChatCompletion.create(
+                model="gpt-4",
+                messages=[{"role": "user", "content": f"Sentence: {chunks[i]['Text']}"}],
+                    functions=[
+                    {
+                        "name": 'translate',
+                        "description": f"""{description}
+                            - The translated length is similar to the original.
+                            - Modern English vocabulary is used, avoiding outdated terms.
+                            - The translation maintains the original context and meaning.""",
+                        "parameters": {
+                            "type": 'object',
+                            "properties": {
+                                "translated_text": {
+                                    'type': 'string',
+                                    'description': 'Translated text string'
+                                }
+                            },
+                            "required": ["translated_text"]
                         }
-                        ],
-                        function_call={"name": "translate"},
-                    )
+                    }
+                    ],
+                    function_call={"name": "translate"},
+                )
+
 
                 reply_content = completion.choices[0].message
                 data = reply_content.to_dict()['function_call']['arguments']
@@ -291,11 +185,16 @@ def translation(chunks, segments, SOURCE_LANG):
                 chunks[i]['Translation'] = data['translated_text']
             else:
                 chunks[i]['Translation'] = chunks[i]['Text']
-            print(f"Orignial: {chunks[i]['Text']}\nTranslated: {chunks[i]['Translation']}\nLanguage: {chunks[i]['Language']}\nStart: {chunks[i]['Start']}\tStop: {chunks[i]['Stop']}\n")
+            
+            print(f"Original: {chunks[i]['Text']}\nTranslated: {chunks[i]['Translation']}\nPath: {chunks[i]['Path']}\nStart: {chunks[i]['Start']}\tStop: {chunks[i]['Stop']}\n\n")
+            manifest["data"].append({"Original": chunks[i]['Text'], "Translated": chunks[i]['Translation'], "Path": chunks[i]['Path'], "Start": chunks[i]['Start'], "Stop": chunks[i]['Stop']})
+    
+    with open("Data/data.json", "w", encoding ='utf8') as file:
+        json.dump(manifest, file, ensure_ascii = False, indent = 4)
+
     return chunks
 
-def audio_synthesis(chunks, segments, email):    
-    #tts = TTS("tts_models/multilingual/multi-dataset/xtts_v1", gpu=True)
+def audio_synthesis(chunks, segments, email="test"):    
 
     background = AudioSegment.from_wav("Data/background.wav")
 
@@ -320,9 +219,19 @@ def audio_synthesis(chunks, segments, email):
         'Content-Type': 'application/json',
     }
 
+    with open("Data/data.json", "r") as file:
+        data = json.load(file)
+
     for i in range(segments):
         if chunks[i]['Speech']:
-            if chunks[i]['Text'] != INAUDIBLE:
+            chunks[i]["Text"] = data["data"][i]["Original"]
+            chunks[i]["Translation"] = data["data"][i]["Translated"]
+            chunks[i]["Start"] = data["data"][i]["Start"]
+            chunks[i]["Stop"] = data["data"][i]["Stop"]
+
+    for i in range(segments):
+        if chunks[i]['Speech']:
+            if chunks[i]['Translation'] != INAUDIBLE:
                 data = {
                     "text": chunks[i]["Translation"],
                     "voice_settings": {
@@ -338,25 +247,26 @@ def audio_synthesis(chunks, segments, email):
                     with open(output_file_path, "wb") as f:
                         f.write(response.content)
                     print(f"Audio file saved as '{output_file_path}'")
+                    cmd = [get_setting("FFMPEG_BINARY"), "-y", '-i', f"ClonedAudio/{i}_generated.mp3", f"ClonedAudio/{i}_generated.wav"]
+                    subprocess_call(cmd)
                 else:
                     print(f"Error: {response.status_code} - {response.text}")
 
     gc.collect()
     torch.cuda.empty_cache()
-    
-    
+
 def audio_modification(chunks, segments):
     for i in range(segments):
-        if chunks[i]['Speech'] and chunks[i]['Text'] != INAUDIBLE:
+        if chunks[i]['Speech'] and chunks[i]['Translation'] != INAUDIBLE:
             original_audio_duration = chunks[i]['Stop'] - chunks[i]['Start']
-            gen_audio = AudioSegment.from_mp3(f"ClonedAudio/{i}_generated.mp3")
+            gen_audio = AudioSegment.from_wav(f"ClonedAudio/{i}_generated.wav")
 
             if gen_audio.duration_seconds < original_audio_duration:
                 chunks[i]['Stop'] = chunks[i]['Start'] + gen_audio.duration_seconds
                 addsilence = AudioSegment.silent(duration=(original_audio_duration - gen_audio.duration_seconds) * 1000)
                 gen_audio = gen_audio + addsilence
             else:
-                with WavReader(f"ClonedAudio/{i}_generated.mp3") as reader:
+                with WavReader(f"ClonedAudio/{i}_generated.wav") as reader:
                     with WavWriter(f"ClonedAudio/{i}_generatedspeed.wav", reader.channels, reader.samplerate) as writer:
                         tsm = wsola(reader.channels, speed = (gen_audio.duration_seconds/original_audio_duration))
                         tsm.run(reader, writer)
@@ -437,22 +347,6 @@ def lipsync(video_path, audio_path, gan=True):
     
     return "lipsync.mp4"
 
-def non_lipsync(video_path):
-    audio_path = "Full_Audio.wav"
-    output_path = "merged.mp4"
-    cmd = [
-        get_setting("FFMPEG_BINARY"), "-y",
-        "-i", video_path,
-        "-i", audio_path,
-        "-map", "0:v",
-        "-map", "1:a",
-        output_path
-    ]
-
-    subprocess_call(cmd)
-  
-    return output_path
-
 def seconds_to_srt_time(seconds):
     hours = int(seconds // 3600)
     minutes = int((seconds % 3600) // 60)
@@ -480,13 +374,7 @@ def chunks_to_srt(chunks, segments, srt_filename):
     
                 with open(data_path, "r") as f:
                     data = json.load(f)
-                # json_trans = json.dumps(data, indent = 1, ensure_ascii=False)
-                # f = open(data_path, "w", encoding='utf-8')
-                # f.write(json_trans)
-                # f.close()
-                # with open(data_path, "r", encoding="utf-8") as f:
-                #     data = json.load(f)
-                #print(data['fragments'])
+
                 for j in range(len(data["fragments"])):
                     
                     start_time = seconds_to_srt_time(chunks[i]['Start'] + float(data["fragments"][j]["begin"]))
@@ -503,17 +391,22 @@ def chunks_to_srt(chunks, segments, srt_filename):
                     count+=1
     gc.collect()
     torch.cuda.empty_cache()
-    
-def merge_srt_with_video(video_path, srt_filename, output_path):
+
+def non_lipsync(video_path):
+    audio_path = "Full_Audio.wav"
+    output_path = "merged.mp4"
     cmd = [
         get_setting("FFMPEG_BINARY"), "-y",
-        '-i', video_path,
-        '-vf', f"subtitles={srt_filename}:force_style='Fontname=Consolas,BackColour=&H80000000,Spacing=0.2,Outline=0,Shadow=0.75'",
-        output_path,
-        "-y"
-        ]
+        "-i", video_path,
+        "-i", audio_path,
+        "-map", "0:v",
+        "-map", "1:a",
+        output_path
+    ]
+
     subprocess_call(cmd)
-    print("Subtitles merged successfully!\n")
+  
+    return output_path
 
 def remove_data():
     folder_paths = [
