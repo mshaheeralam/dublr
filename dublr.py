@@ -3,7 +3,7 @@ from moviepy.tools import subprocess_call
 from moviepy.config import get_setting
 from pydub import AudioSegment, silence
 import os
-import openai
+from openai import OpenAI
 import gc
 import torch
 import torchaudio
@@ -29,7 +29,8 @@ SILENCE_THRESH = 20
 SAMPLE_RATE = 22050 
 INAUDIBLE = "[INAUDIBLE]"
 
-openai.api_key = os.getenv("OPENAIKEY")
+client = OpenAI(api_key=os.getenv("OPENAIKEY"))
+
 set_api_key(os.getenv("11LABs"))
 
 def preprocess(video_path, start, end):
@@ -118,9 +119,9 @@ def transcript(chunks, audio_path):
     while count < segments:
         if chunks[count]['Speech']:
         
-            transcription = openai.Audio.transcribe("whisper-1", open(chunks[count]["Path"], "rb"))
-
-            if len(transcription["text"]) < 10:
+            transcription = client.audio.transcriptions.create(model="whisper-1", file=open(chunks[count]["Path"], "rb"), response_format="text")
+            print(transcription)
+            if len(transcription) < 10:
                 if count == 0 and segments > 1:
                     chunks[count+1]['Start'] = chunks[count]['Start']
                     os.remove(chunks[count]["Path"])
@@ -139,7 +140,7 @@ def transcript(chunks, audio_path):
                     count -= 1
                     chunks[count]['Synthesis'] = False
             else:
-                chunks[count]["Text"] = transcription['text'].strip()
+                chunks[count]["Text"] = transcription.strip()
                 #print(f"Text: {transcription['text']}\n")
                 count += 1
     count = 0
@@ -172,7 +173,7 @@ def translation(chunks, SOURCE_LANG, TAR_LANG):
                     description = f"from {SOURCE_LANG} to {TAR_LANG}"
                 else:
                     description = f"to {TAR_LANG} "
-                completion = openai.ChatCompletion.create(
+                completion = client.chat.completions.create(
                 model="gpt-4",
                 messages=[{"role": "user", "content": f"Sentence: {chunks[i]['Text']}"}],
                     functions=[
@@ -199,10 +200,11 @@ def translation(chunks, SOURCE_LANG, TAR_LANG):
                     function_call={"name": "translate"},
                 )
 
-
+                print(completion.choices[0].message)
                 reply_content = completion.choices[0].message
-                data = reply_content.to_dict()['function_call']['arguments']
+                data = reply_content.function_call.arguments
                 data = json.loads(data)
+                print(data)
                 chunks[i]['Translation'] = data['translated_text']
             else:
                 chunks[i]['Translation'] = chunks[i]['Text']

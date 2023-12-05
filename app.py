@@ -23,6 +23,10 @@ def remove():
 def run():
     db.remove_data()
     try:
+        if st.session_state.start_time==st.session_state.end_time:
+            st.session_state.start_time=None
+            st.session_state.end_time=None
+            
         with st.spinner("Preprocessing..."):
             start = time.time()
             st.session_state.video_path, st.session_state.audio_path = db.preprocess(st.session_state.video_path, st.session_state.start_time, st.session_state.end_time)
