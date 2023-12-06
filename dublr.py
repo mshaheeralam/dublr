@@ -21,6 +21,7 @@ from elevenlabs import set_api_key, clone, generate, play, voices
 import requests
 import boto3
 import uuid
+import spacy
 
 load_dotenv()
 
@@ -32,6 +33,9 @@ INAUDIBLE = "[INAUDIBLE]"
 client = OpenAI(api_key=os.getenv("OPENAIKEY"))
 
 set_api_key(os.getenv("11LABs"))
+
+nlp = spacy.load("en_core_web_sm")
+
 
 def preprocess(video_path, start, end):
     if not video_path.endswith('mp4'):
@@ -166,6 +170,9 @@ def transcript(chunks, audio_path):
 
 
 def translation(chunk, SOURCE_LANG, TAR_LANG):
+    doc = nlp(chunk['Text'])
+    keywords = [token.text for token in doc if token.pos_ in ["NOUN", "PROPN"]]
+    chunk["Keywords"] = ", ".join(keywords)
     
     if chunk['Speech']:
         if chunk['Text'] != INAUDIBLE:
@@ -215,7 +222,7 @@ def translation(chunk, SOURCE_LANG, TAR_LANG):
 
 def audio_synthesis(chunks, name="test", stability = 0.5, similarity_boost = 0.75, style = 0.0, boost = True, cloning = True, voice = None):    
     
-    files = [os.path.join("AudioChunks", file) for file in os.listdir("AudioChunks")]
+    files = [os.path.join("AudioChunks", file) for file in os.listdir("AudioChunks")][:25]
 
     if cloning:
         voice = clone(name=name, files=files)
