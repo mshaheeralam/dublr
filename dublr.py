@@ -98,6 +98,7 @@ def create_segments(audio_path):
     for i in range(segments):  
         clip = myaudio[chunks[i]["Start"]*1000:chunks[i]["Stop"]*1000]
         chunks[i]["Path"] = f"AudioChunks/{i}.wav"
+        chunks[i]["index"]=i
         clip.export(f"AudioChunks/{i}.wav", format="wav")
 
     for i in range(segments-1):
@@ -120,7 +121,6 @@ def transcript(chunks, audio_path):
         if chunks[count]['Speech']:
         
             transcription = client.audio.transcriptions.create(model="whisper-1", file=open(chunks[count]["Path"], "rb"), response_format="text")
-            print(transcription)
             if len(transcription) < 10:
                 if count == 0 and segments > 1:
                     chunks[count+1]['Start'] = chunks[count]['Start']
@@ -147,8 +147,11 @@ def transcript(chunks, audio_path):
     while count < segments:
         if chunks[count]['Speech']:
             chunks[count]['Duration'] = chunks[count]['Stop'] - chunks[count]['Start']
-            if len(chunks[count]["Text"]) // (chunks[count]['Stop'] - chunks[count]['Start']) > 25:
+            CPS = len(chunks[count]["Text"]) / (chunks[count]['Stop'] - chunks[count]['Start'])
+            if CPS > 25.0:
                 chunks[count]["Text"] = INAUDIBLE
+            else:
+                chunks[count]["CPS"] = CPS
         count += 1
 
     gc.collect()
@@ -162,57 +165,53 @@ def transcript(chunks, audio_path):
     return chunks
 
 
-def translation(chunks, SOURCE_LANG, TAR_LANG):
-
-    segments = len(chunks)
-
-    for i in range(segments):
-        if chunks[i]['Speech']:
-            if chunks[i]['Text'] != INAUDIBLE:
-                if SOURCE_LANG:
-                    description = f"from {SOURCE_LANG} to {TAR_LANG}"
-                else:
-                    description = f"to {TAR_LANG} "
-                completion = client.chat.completions.create(
-                model="gpt-4",
-                messages=[{"role": "user", "content": f"Sentence: {chunks[i]['Text']}"}],
-                    functions=[
-                    {
-                        "name": 'translate',
-                        "description": f"""Act as an expert translator and translate the text {description} ensuring:
-                            - The translated length is similar to the original.
-                            - Modern {TAR_LANG} vocabulary is used, avoiding outdated terms.
-                            - Use simple English words, instead of translating to difficult {TAR_LANG} words. 
-                            - The translation maintains the original context and meaning.
-                            - Do not translate filler words.""",
-                        "parameters": {
-                            "type": 'object',
-                            "properties": {
-                                "translated_text": {
-                                    'type': 'string',
-                                    'description': 'Translated text string'
-                                }
-                            },
-                            "required": ["translated_text"]
-                        }
-                    }
-                    ],
-                    function_call={"name": "translate"},
-                )
-
-                print(completion.choices[0].message)
-                reply_content = completion.choices[0].message
-                data = reply_content.function_call.arguments
-                data = json.loads(data)
-                print(data)
-                chunks[i]['Translation'] = data['translated_text']
+def translation(chunk, SOURCE_LANG, TAR_LANG):
+    
+    if chunk['Speech']:
+        if chunk['Text'] != INAUDIBLE:
+            if SOURCE_LANG:
+                description = f"from {SOURCE_LANG} to {TAR_LANG}"
             else:
-                chunks[i]['Translation'] = chunks[i]['Text']
+                description = f"to {TAR_LANG} "
+            completion = client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": f"Sentence: {chunk['Text']}"}],
+                functions=[
+                {
+                    "name": 'translate',
+                    "description": f"""Act as an expert translator and translate the text {description} ensuring:
+                        - The translated length is similar to the original.
+                        - Modern {TAR_LANG} vocabulary is used, avoiding outdated terms.
+                        - Use simple English words, instead of translating to difficult {TAR_LANG} words. 
+                        - The translation maintains the original context and meaning.
+                        - Do not translate filler words.
+                        - Keep names in original text.
+                        - The translated text must be under {chunk["Duration"]} for a speaker with {chunk["CPS"]} characters per second.""",
+                    "parameters": {
+                        "type": 'object',
+                        "properties": {
+                            "translated_text": {
+                                'type': 'string',
+                                'description': 'Translated text string'
+                            }
+                        },
+                        "required": ["translated_text"]
+                    }
+                }
+                ],
+                function_call={"name": "translate"},
+            )
+
+            reply_content = completion.choices[0].message
+            data = reply_content.function_call.arguments
+            data = json.loads(data)
+            chunk['Translation'] = data['translated_text']
+        else:
+            chunk['Translation'] = chunk['Text']
             
             #print(f"Original: {chunks[i]['Text']}\nTranslated: {chunks[i]['Translation']}\nPath: {chunks[i]['Path']}\nStart: {chunks[i]['Start']}\tStop: {chunks[i]['Stop']}\n\n")
     
-
-    return chunks
+    return chunk
 
 def audio_synthesis(chunks, name="test", stability = 0.5, similarity_boost = 0.75, style = 0.0, boost = True, cloning = True, voice = None):    
     

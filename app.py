@@ -4,6 +4,7 @@ import time
 import warnings
 import os
 import requests
+import concurrent.futures
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -23,9 +24,9 @@ def remove():
 def run():
     db.remove_data()
     try:
-        if st.session_state.start_time==st.session_state.end_time:
-            st.session_state.start_time=None
-            st.session_state.end_time=None
+        if st.session_state.start_time == st.session_state.end_time:
+            st.session_state.start_time = None
+            st.session_state.end_time = None
             
         with st.spinner("Preprocessing..."):
             start = time.time()
@@ -65,7 +66,16 @@ def run():
 
         with st.spinner("Translating..."):
             start = time.time()
-            st.session_state.chunks = db.translation(st.session_state.chunks, st.session_state.source_lang, st.session_state.target_lang)
+            num_threads=len(st.session_state.chunks)
+            try:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
+                    args_list = [(chunk, st.session_state.source_lang, st.session_state.target_lang) for chunk in st.session_state.chunks]
+                    chunks=executor.map(db.translation,*zip(*args_list))
+            finally:
+                executor.shutdown()
+            chunks=list(chunks)
+            st.session_state.chunks=chunks
+            #st.session_state.chunks = db.translation(st.session_state.chunks, st.session_state.source_lang, st.session_state.target_lang)
             end = time.time()
             print("Translation :", round((end-start) / 60, 2), "min\n")
         
@@ -94,44 +104,46 @@ def run():
         return e
 
 def merge():
+    with st.spinner("Merging..."):
+        try:
+            start = time.time()
+            db.chunks_to_srt(st.session_state.chunks)
+            end = time.time()
+            if os.path.exists('Data/sub.srt'):
+                print("Subtitles :", round((end-start) / 60, 2), "min\n")
+            else:
+                raise FileNotFoundError("Could not Generate SRT")
+
+            start = time.time()
+            st.session_state.output_path = db.non_lipsync(st.session_state.video_path, st.session_state.chunks)
+            end = time.time()
+            if os.path.exists(st.session_state.output_path):
+                print("Merged :", round((end-start) / 60, 2), "min\n")
+            else:
+                raise FileNotFoundError("No Video File Found")
+
+        except Exception as e:
+            st.exception(e)
+            print(str(e))
+            return e
+
+def upload():
     try:
-        start = time.time()
-        db.chunks_to_srt(st.session_state.chunks)
-        end = time.time()
-        if os.path.exists('Data/sub.srt'):
-            print("Subtitles :", round((end-start) / 60, 2), "min\n")
-        else:
-            raise FileNotFoundError("Could not Generate SRT")
-
-        start = time.time()
-        st.session_state.output_path = db.non_lipsync(st.session_state.video_path, st.session_state.chunks)
-        end = time.time()
-        if os.path.exists(st.session_state.output_path):
-            print("Merged :", round((end-start) / 60, 2), "min\n")
-        else:
-            raise FileNotFoundError("No Video File Found")
-
+        with open(st.session_state.video.name, "wb") as f:
+            f.write(st.session_state.video.getbuffer())
+        st.video(st.session_state.video.name)
+        st.session_state["video_path"] = st.session_state.video.name
     except Exception as e:
         st.exception(e)
-        print(str(e))
-        return e
 
 def main():
-    st.write(st.session_state)
+    with st.expander("State"):
+        st.write(st.session_state)
     
     if 'video_path' not in st.session_state:
-        with st.form(key='video_form'):
-            video = st.file_uploader("Upload Video")
-            submit = st.form_submit_button(label='Load Video')
-            if submit and video:
-                try:
-                    with open(video.name, "wb") as f:
-                        f.write(video.getbuffer())
-                    st.video(video.name)
-                    st.session_state["video_path"] = video.name
-                except Exception as e:
-                    st.exception(e)
-
+        with st.container():
+            st.file_uploader("Upload Video", on_change=upload, key="video")
+                
     if "chunks" not in st.session_state and st.session_state.get("video_path"):
         with st.form(key="args_from"):
             st.number_input("Start Time in seconds", key='start_time')
@@ -201,8 +213,13 @@ def main():
                 col2.form_submit_button(label="Merge", type="primary", on_click=merge)
 
     if st.session_state.get("output_path"):
-        st.video(st.session_state.output_path)
-        st.button(label="Done", on_click=remove)
+        with st.container():
+            with open(st.session_state.output_path, "rb") as file:
+                st.video(file.name)
+                col1, col2 = st.columns(2)
+                col1.button(label="Done", on_click=remove)
+                col2.download_button(label="Download", file_name=file.name, data=file, on_click=remove)
+
 if __name__ == "__main__":
     main()
 #/home/shaheer/Documents/app/Videos/Starc.mp4
