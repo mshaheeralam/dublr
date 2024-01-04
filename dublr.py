@@ -1,4 +1,5 @@
 from moviepy.video.io.ffmpeg_tools import ffmpeg_extract_audio, ffmpeg_extract_subclip
+from moviepy.editor import VideoFileClip, CompositeVideoClip, ImageClip
 from moviepy.tools import subprocess_call
 from moviepy.config import get_setting
 from pydub import AudioSegment, silence
@@ -6,36 +7,18 @@ import os
 from openai import OpenAI
 import gc
 import torch
-import torchaudio
 import glob
-import time
 import json
 from audiotsm import wsola
 from audiotsm.io.wav import WavReader, WavWriter
-from dotenv import load_dotenv
-import nltk
-nltk.download('punkt') 
-from nltk.tokenize import sent_tokenize
-from aeneas.tools.execute_task import ExecuteTaskCLI
-from elevenlabs import set_api_key, clone, generate, play, voices
+from elevenlabs import set_api_key, clone
 import requests
-import boto3
-import uuid
 import spacy
-
-load_dotenv()
 
 SILENCE_LEN = 500
 SILENCE_THRESH = 20
 SAMPLE_RATE = 22050 
 INAUDIBLE = "[INAUDIBLE]"
-
-client = OpenAI(api_key=os.getenv("OPENAIKEY"))
-
-set_api_key(os.getenv("11LABs"))
-
-nlp = spacy.load("en_core_web_sm")
-
 
 def preprocess(video_path, start, end):
     if not video_path.endswith('mp4'):
@@ -115,17 +98,30 @@ def create_segments(audio_path):
 
     return chunks
 
-def transcript(chunks, audio_path):
+def transcript(chunk, key):
 
-    myaudio = AudioSegment.from_wav(audio_path)
-    count = 0
+    client = OpenAI(api_key=key)
+
+    if chunk['Speech']:
+        transcription = client.audio.transcriptions.create(model="whisper-1", file=open(chunk["Path"], "rb"), response_format="text")
+        chunk["Text"] = transcription.strip()
+        #print(f"Text: {transcription['text']}\n")
+
+    # print("")
+    # for i in range(segments):
+    #     print(chunks[i])
+
+    return chunk
+
+def modify_transcript(chunks, audio_path):
+
     segments = len(chunks)
+    myaudio = AudioSegment.from_wav(audio_path)
 
+    count = 0
     while count < segments:
         if chunks[count]['Speech']:
-        
-            transcription = client.audio.transcriptions.create(model="whisper-1", file=open(chunks[count]["Path"], "rb"), response_format="text")
-            if len(transcription) < 10:
+            if len(chunks[count]["Text"]) < 10:
                 if count == 0 and segments > 1:
                     chunks[count+1]['Start'] = chunks[count]['Start']
                     os.remove(chunks[count]["Path"])
@@ -144,9 +140,9 @@ def transcript(chunks, audio_path):
                     count -= 1
                     chunks[count]['Synthesis'] = False
             else:
-                chunks[count]["Text"] = transcription.strip()
                 #print(f"Text: {transcription['text']}\n")
                 count += 1
+
     count = 0
     while count < segments:
         if chunks[count]['Speech']:
@@ -157,22 +153,18 @@ def transcript(chunks, audio_path):
             else:
                 chunks[count]["CPS"] = CPS
         count += 1
-
-    gc.collect()
-    torch.cuda.empty_cache()
-
-
-    # print("")
-    # for i in range(segments):
-    #     print(chunks[i])
-
+    
     return chunks
 
+def translation(chunk, key, SOURCE_LANG, TAR_LANG):
 
-def translation(chunk, SOURCE_LANG, TAR_LANG):
-    doc = nlp(chunk['Text'])
-    keywords = [token.text for token in doc if token.pos_ in ["NOUN", "PROPN"]]
-    chunk["Keywords"] = ", ".join(keywords)
+    client = OpenAI(api_key=key)
+
+    if SOURCE_LANG == 'English':
+        nlp = spacy.load("en_core_web_sm")
+        doc = nlp(chunk['Text'])
+        keywords = [token.text for token in doc if token.pos_ in ["NOUN", "PROPN"]]
+        chunk["Keywords"] = ", ".join(keywords)
     
     if chunk['Speech']:
         if chunk['Text'] != INAUDIBLE:
@@ -181,7 +173,7 @@ def translation(chunk, SOURCE_LANG, TAR_LANG):
             else:
                 description = f"to {TAR_LANG} "
             completion = client.chat.completions.create(
-            model="gpt-4",
+            model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": f"Sentence: {chunk['Text']}"}],
                 functions=[
                 {
@@ -220,8 +212,10 @@ def translation(chunk, SOURCE_LANG, TAR_LANG):
     
     return chunk
 
-def audio_synthesis(chunks, name="test", stability = 0.5, similarity_boost = 0.75, style = 0.0, boost = True, cloning = True, voice = None):    
+def audio_synthesis(chunks, key, name="test", stability = 0.5, similarity_boost = 0.75, style = 0.0, boost = True, cloning = True, voice = None):    
     
+    set_api_key(key)
+
     files = [os.path.join("AudioChunks", file) for file in os.listdir("AudioChunks")][:25]
 
     if cloning:
@@ -230,7 +224,7 @@ def audio_synthesis(chunks, name="test", stability = 0.5, similarity_boost = 0.7
     url = f'https://api.elevenlabs.io/v1/text-to-speech/{voice.voice_id}'
     headers = {
         'accept': 'audio/mpeg',
-        'xi-api-key': os.getenv("11LABs"),
+        'xi-api-key': key,
         'Content-Type': 'application/json',
     }
 
@@ -297,109 +291,6 @@ def audio_modification(chunks):
 
     return chunks
 
-def lipsync(video_path, audio_path):
-    s3 = boto3.client('s3')
-    unique_video = str(uuid.uuid4().hex) + '-' + video_path
-    s3.upload_file(video_path, "dublr-lip-sync-bucket", unique_video)
-    video_url = s3.generate_presigned_url('get_object', Params={'Bucket': "dublr-lip-sync-bucket", 'Key': unique_video}, ExpiresIn=3600)
-
-    unique_audio = str(uuid.uuid4().hex) + '-' + audio_path
-    s3.upload_file(audio_path, "dublr-lip-sync-bucket", unique_audio)
-    audio_url = s3.generate_presigned_url('get_object', Params={'Bucket': "dublr-lip-sync-bucket", 'Key': unique_audio}, ExpiresIn=3600)
-    
-    url = "https://api.synclabs.so/video"
-    headers = {
-        'accept': 'application/json',
-        'x-api-key': os.getenv('SYNC'),
-        'Content-Type': 'application/json'
-    }
-
-    data = {
-        "audioUrl": audio_url,
-        "videoUrl": video_url,
-        "synergize": True
-    }
-
-    response = requests.post(url, headers=headers, json=data)
-
-    if response.json().get('id'):
-        output = response.json()['id']
-    else:
-        return
-    
-    url = f"https://api.synclabs.so/video/{output}"
-    while True:
-        response = requests.get(url, headers=headers)
-        print("response", response) 
-        if response.json().get('url'):
-            break
-        else:
-            print(response.json())
-            time.sleep(20)
-
-    print(response.json())
-
-    s3.delete_object(Bucket="dublr-lip-sync-bucket", Key=unique_video)
-    s3.delete_object(Bucket="dublr-lip-sync-bucket", Key=unique_audio)
-
-    if response.json().get('url'):
-        os.system(f"wget -O lipsync.mp4 {response.json()['url']}")
-    else:
-        return
-    
-    gc.collect()
-    torch.cuda.empty_cache()
-    
-    return "lipsync.mp4"
-
-def seconds_to_srt_time(seconds):
-    hours = int(seconds // 3600)
-    minutes = int((seconds % 3600) // 60)
-    seconds = int(seconds % 60)
-    milliseconds = int((seconds % 1) * 1000)
-    return f"{hours:02d}:{minutes:02d}:{seconds:02d},{milliseconds:03d}"
-
-def chunks_to_srt(chunks, srt_filename='Data/sub.srt'):
-
-    segments = len(chunks)
-
-    with open(srt_filename, 'w') as srt_file:
-        count = 1	
-        for i in range(segments):
-            if chunks[i]["Speech"]:
-                sentences = sent_tokenize(chunks[i]["Translation"])
-                with open("Data/sentence.txt", "w", encoding='utf-8') as file:
-                    file.write('\n'.join(sentences))
-
-                data_path = "Data/manifest.json"
-                ExecuteTaskCLI(use_sys=False).run(arguments=[
-                    None,
-                    f"ModifiedAudio/{i}_adjusted_audio.wav",
-                    "Data/sentence.txt",
-                    u"task_language=eng|is_text_type=plain|os_task_file_format=json",
-                    data_path
-                ])
-    
-                with open(data_path, "r") as f:
-                    data = json.load(f)
-
-                for j in range(len(data["fragments"])):
-                    
-                    start_time = seconds_to_srt_time(chunks[i]['Start'] + float(data["fragments"][j]["begin"]))
-                    if j == len(data['fragments']) - 1:
-                        stop_time = seconds_to_srt_time(chunks[i]['Stop'])
-                    else:
-                        stop_time = seconds_to_srt_time(chunks[i]['Start'] + float(data["fragments"][j]["end"]))
-                    text = data["fragments"][j]["lines"][0]
-
-                    srt_file.write(f"{count}\n")
-                    srt_file.write(f"{start_time} --> {stop_time}\n")
-                    srt_file.write(f"{text}\n")
-                    srt_file.write("\n")
-                    count+=1
-    gc.collect()
-    torch.cuda.empty_cache()
-
 def non_lipsync(video_path, chunks):
     segment = AudioSegment.silent(duration=(chunks[0]['Start'] - 0.0) * 1000)
     segments = len(chunks)
@@ -429,8 +320,19 @@ def non_lipsync(video_path, chunks):
     ]
 
     subprocess_call(cmd)
-  
-    return output_path
+    
+    video = VideoFileClip(output_path)
+
+    if abs(video.rotation) in (90, 270):
+        video = video.resize(video.size[::-1])
+        video.rotation = 0
+
+    title = ImageClip("localised.png").set_duration(video.duration).set_pos(("center","center")).resize(height=min(video.size))
+
+    final = CompositeVideoClip([video, title])
+    final.write_videofile("output.mp4")
+
+    return 'output.mp4'
 
 def remove_data():
     folder_paths = [

@@ -19,3 +19,4 @@ evaluation/test_filelists/lr*.txt
 .env
 *.json
 *.srt
+*.ipynb
