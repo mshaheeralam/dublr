@@ -20,6 +20,9 @@ SILENCE_THRESH = 20
 SAMPLE_RATE = 22050 
 INAUDIBLE = "[INAUDIBLE]"
 
+client = OpenAI(api_key=os.getenv("OPENAIKEY"))
+set_api_key(os.getenv("11LABs"))
+
 def preprocess(video_path, start, end):
     if not video_path.endswith('mp4'):
         cmd = [get_setting("FFMPEG_BINARY"), "-y", '-i', video_path, '-q:v', '0', 'Data/input_video.mp4']
@@ -98,9 +101,9 @@ def create_segments(audio_path):
 
     return chunks
 
-def transcript(chunk, key):
+def transcript(chunk):
 
-    client = OpenAI(api_key=key)
+    #client = OpenAI(api_key=key)
 
     if chunk['Speech']:
         transcription = client.audio.transcriptions.create(model="whisper-1", file=open(chunk["Path"], "rb"), response_format="text")
@@ -119,11 +122,12 @@ def modify_transcript(chunks, audio_path):
     myaudio = AudioSegment.from_wav(audio_path)
 
     count = 0
-    while count < segments:
+    while len(chunks) > 1 and count < segments:
         if chunks[count]['Speech']:
             if len(chunks[count]["Text"]) < 10:
                 if count == 0 and segments > 1:
                     chunks[count+1]['Start'] = chunks[count]['Start']
+                    chunks[count+1]['Text'] = f"{chunks[count]['Text']} {chunks[count+1]['Text']}"
                     os.remove(chunks[count]["Path"])
                     os.remove(chunks[count+1]["Path"])
                     clip = myaudio[chunks[count+1]["Start"]*1000:chunks[count+1]["Stop"]*1000]
@@ -132,6 +136,7 @@ def modify_transcript(chunks, audio_path):
                     chunks[count]['Synthesis'] = False
                 else:
                     chunks[count]['Start'] = chunks[count-1]['Start']
+                    chunks[count]['Text'] = f"{chunks[count-1]['Text']} {chunks[count]['Text']}"
                     os.remove(chunks[count]["Path"])
                     os.remove(chunks[count-1]["Path"])
                     clip = myaudio[chunks[count]["Start"]*1000:chunks[count]["Stop"]*1000]
@@ -139,6 +144,7 @@ def modify_transcript(chunks, audio_path):
                     del chunks[count-1]
                     count -= 1
                     chunks[count]['Synthesis'] = False
+                segments -= 1
             else:
                 #print(f"Text: {transcription['text']}\n")
                 count += 1
@@ -156,9 +162,9 @@ def modify_transcript(chunks, audio_path):
     
     return chunks
 
-def translation(chunk, key, SOURCE_LANG, TAR_LANG):
+def translation(chunk, SOURCE_LANG, TAR_LANG):
 
-    client = OpenAI(api_key=key)
+    #client = OpenAI(api_key=key)
 
     if SOURCE_LANG == 'English':
         nlp = spacy.load("en_core_web_sm")
@@ -212,9 +218,9 @@ def translation(chunk, key, SOURCE_LANG, TAR_LANG):
     
     return chunk
 
-def audio_synthesis(chunks, key, name="test", stability = 0.5, similarity_boost = 0.75, style = 0.0, boost = True, cloning = True, voice = None):    
+def audio_synthesis(chunks, name="test", stability = 0.5, similarity_boost = 0.75, style = 0.0, boost = True, cloning = True, voice = None):    
     
-    set_api_key(key)
+    #set_api_key(key)
 
     files = [os.path.join("AudioChunks", file) for file in os.listdir("AudioChunks")][:25]
 
@@ -224,10 +230,10 @@ def audio_synthesis(chunks, key, name="test", stability = 0.5, similarity_boost 
     url = f'https://api.elevenlabs.io/v1/text-to-speech/{voice.voice_id}'
     headers = {
         'accept': 'audio/mpeg',
-        'xi-api-key': key,
+        'xi-api-key': os.getenv("11LABs"),
         'Content-Type': 'application/json',
     }
-
+    
     segments = len(chunks)
 
     for i in range(segments):
