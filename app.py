@@ -17,6 +17,11 @@ LANG = ['Arabic', 'Chinese', 'English', 'French', 'German', 'Hindi', 'Italian', 
 # for k, v in st.session_state.items():
 #         st.session_state[k] = v
 
+os.makedirs("Data", exist_ok=True)
+os.makedirs("ClonedAudio", exist_ok=True)
+os.makedirs("ModifiedAudio", exist_ok=True)
+os.makedirs("AudioChunks", exist_ok=True)
+
 def remove_keys():
     for key in st.session_state.keys():
         #if key != 'openai_key' and key != 'elevenlabs_key':
