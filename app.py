@@ -160,6 +160,7 @@ def upload():
         st.video(st.session_state.video.name)
         st.session_state["video_path"] = st.session_state.video.name
         myaudio = AudioSegment.from_file(st.session_state.video.name)
+        print(myaudio.duration_seconds)
         st.session_state["video_length"] = myaudio.duration_seconds
     except Exception as e:
         st.error(e)
