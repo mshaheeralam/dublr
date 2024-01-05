@@ -225,8 +225,8 @@ def main():
 
     # st.button(label='Home', on_click=remove_keys)
 
-    # with st.expander("State"):
-    #     st.write(st.session_state)
+    with st.expander("State"):
+        st.write(st.session_state)
 
     if 'video_path' not in st.session_state:
         with st.container():
