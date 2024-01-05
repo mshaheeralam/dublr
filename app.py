@@ -22,6 +22,7 @@ def remove_keys():
             del st.session_state[key]
 
 def remove():
+
     files = glob.glob("*.mp4")
     for f in files:
         os.remove(f)
@@ -32,6 +33,8 @@ def remove():
 
     if response.status_code != 200:
         raise LookupError(f"Error: {response.status_code} - {response.text}")
+
+    remove_keys()
 
 def run():
     db.remove_data()
@@ -137,14 +140,6 @@ def merge():
     with st.spinner("Merging..."):
         try:
             start = time.time()
-            db.chunks_to_srt(st.session_state.chunks)
-            end = time.time()
-            if os.path.exists('Data/sub.srt'):
-                print("Subtitles :", round((end-start) / 60, 2), "min\n")
-            else:
-                raise FileNotFoundError("Could not Generate SRT")
-
-            start = time.time()
             st.session_state.output_path = db.non_lipsync(st.session_state.video_path, st.session_state.chunks)
             end = time.time()
             if os.path.exists(st.session_state.output_path):
@@ -196,11 +191,22 @@ def get_image_as_base64(path):
 
 def main():
 
+    with st.sidebar:
+        st.title("Guidelines")
+        st.write("This is a beta version of Dublr AI dubbing tool")
+        st.write("Only single speaker is supported")
+        st.write("Leave start and end time at 0.0, if you wish to dub full video")
+        st.write("After dubbing, select a chunk to view and edit it.")
+        st.write("After editing, press Run and then again select chunk from dropdown menu to update it")
+        st.write("When you are satisfied with the output, press Merge")
+        st.write("In case of any queries, reach us out at info@dublr.ai")
+        
     image_path = 'beta.png'
     image_base64 = get_image_as_base64(image_path)
-    link = f'<div style="text-align: center;"><a href="https://dublr.ai" target="_blank"><img src="data:image/png;base64,{image_base64}" alt="Dublr" width="200px" style="margin: 0 auto;"></a><p>info@dublr.ai</p></div>'
+    link = f'<div style="text-align: center;"><a href="https://dublr.ai" target="_blank"><img src="data:image/png;base64,{image_base64}" alt="Dublr" width="200px" style="margin: 0 auto;"></a></div>'
     
     st.markdown(link, unsafe_allow_html=True)
+    st.write("")
     st.write("")
 
     st.button(label='Home', on_click=remove_keys)
