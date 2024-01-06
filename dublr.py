@@ -14,6 +14,7 @@ from audiotsm.io.wav import WavReader, WavWriter
 from elevenlabs import set_api_key, clone
 import requests
 import spacy
+import demucs.separate
 
 SILENCE_LEN = 500
 SILENCE_THRESH = 20
@@ -40,8 +41,9 @@ def preprocess(video_path, start, end):
     return video_path, audio_path
 
 def denoise(audio_path):
-    cmd = ["python", "-m", "demucs.separate", "-o", 'Data/', '--mp3', '--mp3-preset', '2', f'--mp3-bitrate={SAMPLE_RATE}', '--two-stems=vocals', audio_path]
-    subprocess_call(cmd)
+    demucs.separate.main(["--mp3", "-o", "Data/", "--two-stems=vocals", f"--mp3-bitrate={22050}", audio_path])
+    # cmd = ["python", "-m", "demucs.separate", "-o", 'Data/', '--mp3', '--mp3-preset', '2', f'--mp3-bitrate={SAMPLE_RATE}', '--two-stems=vocals', audio_path]
+    # subprocess_call(cmd)
     os.rename("Data/htdemucs/input_video/vocals.mp3", "Data/vocals.mp3")
     os.rename("Data/htdemucs/input_video/no_vocals.mp3", "Data/background.mp3")
     os.system("rm -rf Data/htdemucs")
@@ -341,6 +343,8 @@ def non_lipsync(video_path, chunks):
     return 'output.mp4'
 
 def remove_data():
+    os.system("rm -rf Data/htdemucs")
+
     folder_paths = [
         'Data/*',
         'ClonedAudio/*',

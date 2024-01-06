@@ -254,7 +254,7 @@ def main():
 
             st.session_state.current_chunk = st.session_state.chunks[st.session_state.current]
 
-            with st.container():
+            with st.form("chunk_info"):
                 st.write("Text")
                 st.session_state.current_chunk["Text"] = st.text_area(label="Placeholder", label_visibility="hidden",
                                                                             value=st.session_state.current_chunk["Text"])
@@ -279,8 +279,8 @@ def main():
                 st.checkbox(label="Speaker Boost", key="boost", value=True)
                 
                 col1, col2 = st.columns(2)
-                col1.button(label='Run', on_click=generate)
-                col2.button(label="Merge", type="primary", on_click=merge)
+                col1.form_submit_button(label='Run', on_click=generate)
+                col2.form_submit_button(label="Merge", type="primary", on_click=merge)
 
     if st.session_state.get("output_path"):
         with st.container():
