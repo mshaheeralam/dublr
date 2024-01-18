@@ -9,6 +9,7 @@ import traceback
 import base64
 import glob
 from pydub import AudioSegment
+from pytube import YouTube
 
 warnings.filterwarnings('ignore')
 
@@ -165,6 +166,19 @@ def upload():
         st.video(st.session_state.video.name)
         st.session_state["video_path"] = st.session_state.video.name
         myaudio = AudioSegment.from_file(st.session_state.video.name)
+        st.session_state["video_length"] = myaudio.duration_seconds
+    except Exception as e:
+        st.error(e)
+        print(traceback.format_exc())
+
+def download():
+    try:
+        yt = YouTube(st.session_state.link)
+        stream = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc().first()
+        stream.download(filename="video.mp4")
+        st.video("video.mp4")
+        st.session_state["video_path"] = "video.mp4"
+        myaudio = AudioSegment.from_file("video.mp4")
         print(myaudio.duration_seconds)
         st.session_state["video_length"] = myaudio.duration_seconds
     except Exception as e:
@@ -235,8 +249,13 @@ def main():
     #     st.write(st.session_state)
 
     if 'video_path' not in st.session_state:
-        with st.container():
-            st.file_uploader("Upload Video", on_change=upload, key="video", type=["mp4"])
+        tab1, tab2 = st.tabs(["Upload Video", "Youtube Link"])
+
+        with tab1:
+            st.file_uploader("Upload Video", on_change=upload, key="video", type=["mp4"], label_visibility='hidden')
+
+        with tab2:
+            st.text_input("Youtube Link", key="link", on_change=download, label_visibility='hidden', placeholder="Paste Youtube Link")
             
     if "chunks" not in st.session_state and st.session_state.get("video_path"):
         with st.form(key="args_from"):
@@ -292,4 +311,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-#/home/shaheer/Documents/app/Videos/Starc.mp4
